@@ -1,5 +1,3 @@
-import type { Category } from "./api";
-
 export function categoryStyles(category: string): string {
   switch (category) {
     case "critical":

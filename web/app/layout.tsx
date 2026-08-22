@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   description: "CI reliability monitor — detect flaky tests",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
