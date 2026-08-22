@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import githubWebhookPlugin from "./routes/githubWebhook.js";
 import ingestPlugin, { type IngestOptions } from "./routes/ingest.js";
+import apiPlugin, { type ApiOptions } from "./routes/api.js";
 import {
   InMemoryDeliveryStore,
   type DeliveryStore,
@@ -17,6 +18,8 @@ export interface BuildAppOptions {
   processor?: WebhookProcessor;
   /** Pass to enable the /v1/ingest route (requires a DB-backed processor). */
   ingest?: IngestOptions | null;
+  /** Pass to enable the read-only /api/* dashboard routes (requires a pool). */
+  api?: ApiOptions | null;
 }
 
 export function buildApp(
@@ -40,6 +43,10 @@ export function buildApp(
 
   if (options.ingest) {
     app.register(ingestPlugin, options.ingest);
+  }
+
+  if (options.api) {
+    app.register(apiPlugin, options.api);
   }
 
   return app;

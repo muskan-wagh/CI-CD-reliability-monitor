@@ -2,12 +2,15 @@ import type { Pool } from "pg";
 import { parseJunit } from "./junit.js";
 import { computeIdentity } from "./identity.js";
 import { computeFailureFingerprint } from "./fingerprint.js";
+import { scoreTests } from "./score.js";
 import {
-  insertTestResult,
-  upsertFailureSignature,
+  bulkInsertTestResults,
+  bulkUpsertFailureSignatures,
+  bulkUpsertTests,
   upsertRepository,
-  upsertTest,
   upsertWorkflowRun,
+  type TestInput,
+  type TestResultInput,
 } from "./store.js";
 
 export interface IngestInput {
@@ -30,9 +33,15 @@ export interface IngestSummary {
 }
 
 /**
- * Parse a JUnit report and persist its tests/results in a single transaction.
+ * Parse a JUnit report and persist its tests/results in a single transaction,
+ * using bulk inserts (one round trip per table, not per row).
+ *
  * Idempotent: re-ingesting the same payload produces no duplicate rows (all
  * writes are upserts / ON CONFLICT DO NOTHING).
+ *
+ * Scoring is intentionally NOT awaited — it is scheduled asynchronously via
+ * `scoreTests` so this request returns fast. Scores are a disposable cache
+ * that can always be rebuilt from `test_results`.
  */
 export async function processIngest(
   pool: Pool,
@@ -41,6 +50,9 @@ export async function processIngest(
   const parsed = parseJunit(input.reportXml);
 
   const client = await pool.connect();
+  let testIds: number[] = [];
+  let summary: IngestSummary;
+
   try {
     await client.query("BEGIN");
 
@@ -60,14 +72,18 @@ export async function processIngest(
     const executedAt = input.executedAt ? new Date(input.executedAt) : new Date();
     const sourceJobName = input.jobName ?? "test";
 
-    let passed = 0;
-    let failed = 0;
-    let skipped = 0;
+    // Normalize identities and dedupe within the batch (same test twice in a
+    // report is a reporter bug; keep the first and skip the rest).
+    const seen = new Set<string>();
+    const testInputs: TestInput[] = [];
+    const resultRows: { testIdx: number; t: (typeof parsed)[number] }[] = [];
 
     for (const t of parsed) {
       const identity = computeIdentity({ filePath: t.filePath, name: t.name });
+      if (seen.has(identity.identityHash)) continue;
+      seen.add(identity.identityHash);
 
-      const testId = await upsertTest(client, {
+      testInputs.push({
         repositoryId,
         identityHash: identity.identityHash,
         filePath: identity.filePath,
@@ -75,23 +91,63 @@ export async function processIngest(
         name: identity.name,
         parentHash: identity.parentHash,
       });
+      resultRows.push({ testIdx: testInputs.length - 1, t });
+    }
 
+    testIds = await bulkUpsertTests(client, testInputs);
+
+    // Aggregate failure fingerprints (dedupe by fingerprint, count occurrences).
+    const signatureCounts = new Map<
+      string,
+      { errorClass: string; sampleMessage: string; count: number }
+    >();
+    for (const { t } of resultRows) {
+      if (t.status !== "failed") continue;
+      const fp = computeFailureFingerprint({
+        errorClass: t.errorClass,
+        message: t.failureMessage,
+      });
+      const existing = signatureCounts.get(fp.fingerprint);
+      if (existing) {
+        existing.count++;
+      } else {
+        signatureCounts.set(fp.fingerprint, {
+          errorClass: fp.errorClass,
+          sampleMessage: fp.sampleMessage,
+          count: 1,
+        });
+      }
+    }
+
+    const signatureIdByFingerprint = await bulkUpsertFailureSignatures(
+      client,
+      [...signatureCounts.entries()].map(([fingerprint, s]) => ({
+        repositoryId,
+        fingerprint,
+        errorClass: s.errorClass,
+        sampleMessage: s.sampleMessage,
+        occurrenceCount: s.count,
+      })),
+    );
+
+    // Build result rows.
+    const results: TestResultInput[] = [];
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const { testIdx, t } of resultRows) {
       let failureSignatureId: number | null = null;
       if (t.status === "failed") {
         const fp = computeFailureFingerprint({
           errorClass: t.errorClass,
           message: t.failureMessage,
         });
-        failureSignatureId = await upsertFailureSignature(client, {
-          repositoryId,
-          fingerprint: fp.fingerprint,
-          errorClass: fp.errorClass,
-          sampleMessage: fp.sampleMessage,
-        });
+        failureSignatureId = signatureIdByFingerprint.get(fp.fingerprint) ?? null;
       }
 
-      await insertTestResult(client, {
-        testId,
+      results.push({
+        testId: testIds[testIdx] as number,
         workflowRunId,
         status: t.status,
         durationMs: t.durationMs,
@@ -105,17 +161,26 @@ export async function processIngest(
       else skipped++;
     }
 
+    await bulkInsertTestResults(client, results);
+
     await client.query(
       `UPDATE workflow_runs SET results_state = 'received' WHERE id = $1`,
       [workflowRunId],
     );
 
     await client.query("COMMIT");
-    return { testsReceived: parsed.length, passed, failed, skipped };
+    summary = { testsReceived: parsed.length, passed, failed, skipped };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
   }
+
+  // Fire-and-forget scoring: keep the ingest response fast.
+  void scoreTests(pool, testIds).catch((err) => {
+    console.error("async scoring failed", err);
+  });
+
+  return summary;
 }

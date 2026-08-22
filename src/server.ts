@@ -24,6 +24,7 @@ const app = buildApp(
       apiKey: config.ingestApiKey,
       processIngest: (input) => processIngest(pool, input),
     },
+    api: { pool },
   },
 );
 

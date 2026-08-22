@@ -86,34 +86,47 @@ export interface TestInput {
   parentHash?: string | null;
 }
 
-/** Get-or-create a test by (repository, identity_hash). */
-export async function upsertTest(
+/**
+ * Get-or-create many tests in a single round trip. `inputs` MUST have unique
+ * `identityHash` values (the caller dedupes) or Postgres rejects the batch
+ * with "cannot affect row a second time".
+ *
+ * Returns test ids in the same order as `inputs`.
+ */
+export async function bulkUpsertTests(
   db: Queryable,
-  input: TestInput,
-): Promise<number> {
+  inputs: TestInput[],
+): Promise<number[]> {
+  if (inputs.length === 0) return [];
+
+  const values: string[] = [];
+  const params: unknown[] = [];
+  inputs.forEach((t, i) => {
+    const b = i * 6;
+    values.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6})`);
+    params.push(
+      t.repositoryId,
+      t.identityHash,
+      t.filePath,
+      t.suitePath,
+      t.name,
+      t.parentHash ?? null,
+    );
+  });
+
   const result = await db.query<{ id: string }>(
     `INSERT INTO tests (repository_id, identity_hash, file_path, suite_path, name, parent_hash)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ${values.join(", ")}
      ON CONFLICT (repository_id, identity_hash) DO UPDATE SET
-       file_path   = EXCLUDED.file_path,
-       suite_path  = EXCLUDED.suite_path,
-       name        = EXCLUDED.name,
+       file_path    = EXCLUDED.file_path,
+       suite_path   = EXCLUDED.suite_path,
+       name         = EXCLUDED.name,
        last_seen_at = now()
      RETURNING id`,
-    [
-      input.repositoryId,
-      input.identityHash,
-      input.filePath,
-      input.suitePath,
-      input.name,
-      input.parentHash ?? null,
-    ],
+    params,
   );
-  const id = Number(result.rows[0]?.id);
-  if (!Number.isInteger(id)) {
-    throw new Error(`upsertTest returned no id for ${input.identityHash}`);
-  }
-  return id;
+
+  return result.rows.map((r) => Number(r.id));
 }
 
 export interface FailureSignatureInput {
@@ -121,29 +134,54 @@ export interface FailureSignatureInput {
   fingerprint: string;
   errorClass: string;
   sampleMessage: string;
+  /** How many failures in this batch share this signature (defaults to 1). */
+  occurrenceCount?: number;
 }
 
-/** Get-or-create a failure signature and bump its occurrence count. */
-export async function upsertFailureSignature(
+/**
+ * Get-or-create failure signatures in one round trip, bumping occurrence
+ * counts by each signature's count. `inputs` MUST have unique `fingerprint`
+ * values (the caller aggregates duplicates before calling).
+ *
+ * Returns a map of fingerprint -> signature id.
+ */
+export async function bulkUpsertFailureSignatures(
   db: Queryable,
-  input: FailureSignatureInput,
-): Promise<number> {
-  const result = await db.query<{ id: string }>(
-    `INSERT INTO failure_signatures (repository_id, fingerprint, error_class, sample_message)
-     VALUES ($1, $2, $3, $4)
+  inputs: FailureSignatureInput[],
+): Promise<Map<string, number>> {
+  const byFingerprint = new Map<string, number>();
+  if (inputs.length === 0) return byFingerprint;
+
+  const values: string[] = [];
+  const params: unknown[] = [];
+  inputs.forEach((s, i) => {
+    const b = i * 5;
+    values.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5})`);
+    params.push(
+      s.repositoryId,
+      s.fingerprint,
+      s.errorClass,
+      s.sampleMessage,
+      s.occurrenceCount ?? 1,
+    );
+  });
+
+  const result = await db.query<{ id: string; fingerprint: string }>(
+    `INSERT INTO failure_signatures (repository_id, fingerprint, error_class, sample_message, occurrence_count)
+     VALUES ${values.join(", ")}
      ON CONFLICT (repository_id, fingerprint) DO UPDATE SET
        error_class      = EXCLUDED.error_class,
        sample_message   = EXCLUDED.sample_message,
        last_seen_at     = now(),
-       occurrence_count = failure_signatures.occurrence_count + 1
-     RETURNING id`,
-    [input.repositoryId, input.fingerprint, input.errorClass, input.sampleMessage],
+       occurrence_count = failure_signatures.occurrence_count + EXCLUDED.occurrence_count
+     RETURNING fingerprint, id`,
+    params,
   );
-  const id = Number(result.rows[0]?.id);
-  if (!Number.isInteger(id)) {
-    throw new Error(`upsertFailureSignature returned no id for ${input.fingerprint}`);
+
+  for (const row of result.rows) {
+    byFingerprint.set(row.fingerprint, Number(row.id));
   }
-  return id;
+  return byFingerprint;
 }
 
 export interface TestResultInput {
@@ -156,26 +194,36 @@ export interface TestResultInput {
   executedAt: Date;
 }
 
-/** Insert a single result; the unique key makes reprocessing harmless. */
-export async function insertTestResult(
+/** Insert many results in one round trip; the unique key makes reprocessing harmless. */
+export async function bulkInsertTestResults(
   db: Queryable,
-  input: TestResultInput,
-): Promise<number> {
-  const result = await db.query<{ id: string }>(
+  inputs: TestResultInput[],
+): Promise<void> {
+  if (inputs.length === 0) return;
+
+  const values: string[] = [];
+  const params: unknown[] = [];
+  inputs.forEach((r, i) => {
+    const b = i * 7;
+    values.push(
+      `($${b + 1},$${b + 2},$${b + 3}::test_status,$${b + 4},$${b + 5},$${b + 6},$${b + 7})`,
+    );
+    params.push(
+      r.testId,
+      r.workflowRunId,
+      r.status,
+      r.durationMs ?? null,
+      r.failureSignatureId ?? null,
+      r.sourceJobName,
+      r.executedAt,
+    );
+  });
+
+  await db.query(
     `INSERT INTO test_results
        (test_id, workflow_run_id, status, duration_ms, failure_signature_id, source_job_name, executed_at)
-     VALUES ($1, $2, $3::test_status, $4, $5, $6, $7)
-     ON CONFLICT (test_id, workflow_run_id, source_job_name) DO NOTHING
-     RETURNING id`,
-    [
-      input.testId,
-      input.workflowRunId,
-      input.status,
-      input.durationMs ?? null,
-      input.failureSignatureId ?? null,
-      input.sourceJobName,
-      input.executedAt,
-    ],
+     VALUES ${values.join(", ")}
+     ON CONFLICT (test_id, workflow_run_id, source_job_name) DO NOTHING`,
+    params,
   );
-  return Number(result.rows[0]?.id ?? 0);
 }

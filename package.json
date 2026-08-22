@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "db:migrate": "tsx src/db/migrate-run.ts",
+    "dashboard": "npm run dev --prefix web",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
