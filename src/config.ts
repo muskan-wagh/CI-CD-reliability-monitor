@@ -12,6 +12,11 @@ export interface Config extends AppConfig {
   host: string;
   databaseUrl: string;
   ingestApiKey: string;
+  /** Optional: enables PR annotation (Phase 5). Absent -> annotation disabled. */
+  githubAppId?: string;
+  privateKeyPath?: string;
+  /** Optional public dashboard base URL, linked from PR comments. */
+  dashboardUrl?: string;
 }
 
 function loadEnvFile(): void {
@@ -48,5 +53,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const host = env.HOST ?? "0.0.0.0";
 
-  return { githubWebhookSecret, port, host, databaseUrl, ingestApiKey };
+  // Optional Phase 5 settings — annotation stays disabled when absent.
+  const githubAppId = env.GITHUB_APP_ID;
+  const privateKeyPath = env.GITHUB_PRIVATE_KEY_PATH;
+
+  return {
+    githubWebhookSecret,
+    port,
+    host,
+    databaseUrl,
+    ingestApiKey,
+    githubAppId: githubAppId || undefined,
+    privateKeyPath: privateKeyPath || undefined,
+    dashboardUrl: env.DASHBOARD_URL || undefined,
+  };
 }

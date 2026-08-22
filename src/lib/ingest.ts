@@ -3,6 +3,7 @@ import { parseJunit } from "./junit.js";
 import { computeIdentity } from "./identity.js";
 import { computeFailureFingerprint } from "./fingerprint.js";
 import { scoreTests } from "./score.js";
+import { annotateRun } from "./prAnnotation.js";
 import {
   bulkInsertTestResults,
   bulkUpsertFailureSignatures,
@@ -51,6 +52,7 @@ export async function processIngest(
 
   const client = await pool.connect();
   let testIds: number[] = [];
+  let workflowRunId: number | undefined;
   let summary: IngestSummary;
 
   try {
@@ -61,7 +63,7 @@ export async function processIngest(
       githubRepoId: input.githubRepoId ?? null,
     });
 
-    const workflowRunId = await upsertWorkflowRun(client, {
+    workflowRunId = await upsertWorkflowRun(client, {
       repositoryId,
       githubRunId: input.githubRunId,
       runAttempt: input.runAttempt,
@@ -177,10 +179,15 @@ export async function processIngest(
     client.release();
   }
 
-  // Fire-and-forget scoring: keep the ingest response fast.
-  void scoreTests(pool, testIds).catch((err) => {
-    console.error("async scoring failed", err);
-  });
+  // Fire-and-forget scoring + PR annotation: keep the ingest response fast.
+  // Scoring first; annotation only sees fresh scores and runs off-path.
+  void scoreTests(pool, testIds)
+    .then(() => {
+      if (workflowRunId !== undefined) return annotateRun(pool, workflowRunId);
+    })
+    .catch((err) => {
+      console.error("async scoring/annotation failed", err);
+    });
 
   return summary;
 }

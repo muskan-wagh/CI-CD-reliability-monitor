@@ -227,3 +227,29 @@ export async function bulkInsertTestResults(
     params,
   );
 }
+
+export interface PrAnnotationInput {
+  repositoryId: number;
+  prNumber: number;
+  commentId: number;
+  bodySnapshot: string;
+}
+
+/**
+ * One living report comment per PR: the unique (repository, pr) key makes
+ * re-annotation an UPDATE of our tracked comment id, never a duplicate post.
+ */
+export async function upsertPrAnnotation(
+  db: Queryable,
+  input: PrAnnotationInput,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO pr_annotations (repository_id, pr_number, comment_id, body_snapshot)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (repository_id, pr_number) DO UPDATE SET
+       comment_id    = EXCLUDED.comment_id,
+       body_snapshot = EXCLUDED.body_snapshot,
+       posted_at     = now()`,
+    [input.repositoryId, input.prNumber, input.commentId, input.bodySnapshot],
+  );
+}
