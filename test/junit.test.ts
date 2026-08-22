@@ -91,3 +91,20 @@ test("classname falls back to suite name when missing", () => {
   const tests = parseJunit(xml);
   assert.equal(tests[0]?.filePath, "fallback.test.ts");
 });
+
+test("parses the flat node:test reporter shape (no <testsuite> wrapper)", () => {
+  const xml = `
+  <?xml version="1.0" encoding="utf-8"?>
+  <testsuites>
+    <testcase classname="test" name="passes cleanly" time="0.004"/>
+    <testcase classname="test" name="fails loudly" time="0.01">
+      <failure type="test:failure" message="expected 1 to equal 2">at test.ts:3</failure>
+    </testcase>
+  </testsuites>`;
+  const tests = parseJunit(xml);
+  assert.equal(tests.length, 2);
+  assert.equal(tests[0]?.name, "passes cleanly");
+  assert.equal(tests[0]?.status, "passed");
+  assert.equal(tests[1]?.status, "failed");
+  assert.equal(tests[1]?.failureMessage, "expected 1 to equal 2");
+});

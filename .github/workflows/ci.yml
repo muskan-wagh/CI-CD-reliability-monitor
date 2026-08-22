@@ -18,6 +18,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # Dogfood: FlakyGuard monitors its own tests. Skips cleanly when the
+      # FLAKYGUARD_API_KEY secret is unset (fork PRs, first runs).
+      - name: Upload results to FlakyGuard
+        if: always()
+        continue-on-error: true
+        uses: ./action
+        with:
+          report-path: junit.xml
+          api-url: ${{ vars.FLAKYGUARD_API_URL }}
+          api-key: ${{ secrets.FLAKYGUARD_API_KEY }}
 
   dashboard:
     name: Dashboard — typecheck, lint & build

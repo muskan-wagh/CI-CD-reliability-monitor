@@ -94,25 +94,57 @@ function firstFailure(testcase: unknown): {
 
 /**
  * Parse a JUnit XML string into normalized `ParsedTest` records.
- * Handles both `<testsuites>` wrappers and bare `<testsuite>` roots.
+ * Handles three shapes seen in the wild:
+ *  - `<testsuites><testsuite><testcase/></testsuite></testsuites>` (Vitest/Jest/pytest)
+ *  - bare `<testsuite>` roots (some tools)
+ *  - flat `<testsuites><testcase/></testsuites>` (node:test reporter)
  */
 export function parseJunit(xml: string): ParsedTest[] {
   const doc = parser.parse(xml) as Attr;
 
   const suites: unknown[] = [];
-  if (Array.isArray(doc.testsuites)) {
-    for (const root of doc.testsuites) {
-      collectSuites(root, suites);
+  const looseTests: unknown[] = [];
+
+  const roots = Array.isArray(doc.testsuites)
+    ? doc.testsuites
+    : doc.testsuites
+      ? [doc.testsuites]
+      : [];
+
+  for (const root of roots) {
+    collectSuites(root, suites);
+    if (typeof root === "object" && root !== null) {
+      const n = root as Attr;
+      // node:test style: <testcase> directly inside <testsuites>
+      if (Array.isArray(n.testcase)) looseTests.push(...n.testcase);
+      else if (n.testcase) looseTests.push(n.testcase);
     }
-  } else if (doc.testsuites) {
-    collectSuites(doc.testsuites, suites);
-  } else if (Array.isArray(doc.testsuite)) {
-    suites.push(...doc.testsuite);
-  } else if (doc.testsuite) {
-    suites.push(doc.testsuite);
   }
 
+  if (Array.isArray(doc.testsuite)) suites.push(...doc.testsuite);
+  else if (doc.testsuite) suites.push(doc.testsuite);
+
   const tests: ParsedTest[] = [];
+  const pushTestcase = (tc: unknown, fallbackFilePath: string) => {
+    if (typeof tc !== "object" || tc === null) return;
+    const className = attr(tc, "@_classname");
+    const name = attr(tc, "@_name");
+    const time = attr(tc, "@_time");
+
+    const filePath =
+      typeof className === "string" && className.length > 0 ? className : fallbackFilePath;
+    const { failureMessage, errorClass } = firstFailure(tc);
+
+    tests.push({
+      filePath,
+      name: typeof name === "string" ? name : "",
+      status: statusOf(tc),
+      durationMs: toDurationMs(time),
+      ...(failureMessage !== undefined ? { failureMessage } : {}),
+      ...(errorClass !== undefined ? { errorClass } : {}),
+    });
+  };
+
   for (const suite of suites) {
     if (typeof suite !== "object" || suite === null) continue;
     const suiteNode = suite as Attr;
@@ -122,26 +154,10 @@ export function parseJunit(xml: string): ParsedTest[] {
         : "";
 
     const testcases = Array.isArray(suiteNode.testcase) ? suiteNode.testcase : [];
-    for (const tc of testcases) {
-      if (typeof tc !== "object" || tc === null) continue;
-      const className = attr(tc, "@_classname");
-      const name = attr(tc, "@_name");
-      const time = attr(tc, "@_time");
-
-      const filePath =
-        typeof className === "string" && className.length > 0 ? className : suiteName;
-      const { failureMessage, errorClass } = firstFailure(tc);
-
-      tests.push({
-        filePath,
-        name: typeof name === "string" ? name : "",
-        status: statusOf(tc),
-        durationMs: toDurationMs(time),
-        ...(failureMessage !== undefined ? { failureMessage } : {}),
-        ...(errorClass !== undefined ? { errorClass } : {}),
-      });
-    }
+    for (const tc of testcases) pushTestcase(tc, suiteName);
   }
+
+  for (const tc of looseTests) pushTestcase(tc, "");
 
   return tests;
 }

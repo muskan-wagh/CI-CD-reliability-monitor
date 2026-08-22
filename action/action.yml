@@ -1,0 +1,62 @@
+name: "FlakyGuard Action"
+description: >
+  Upload JUnit test reports to FlakyGuard. Run it in a step with `if: always()`
+  so failing test runs are reported too. Skips silently when api-key is empty
+  (e.g. fork PRs, where secrets are unavailable).
+author: "FlakyGuard"
+
+inputs:
+  report-path:
+    description: "Path to the JUnit XML report"
+    required: true
+    default: junit.xml
+  api-url:
+    description: "FlakyGuard API base URL"
+    required: true
+  api-key:
+    description: "FlakyGuard ingest API key"
+    required: true
+  repository:
+    description: "Repository full name"
+    required: false
+    default: ${{ github.repository }}
+  run-id:
+    description: "Workflow run id"
+    required: false
+    default: ${{ github.run_id }}
+  run-attempt:
+    description: "Workflow run attempt"
+    required: false
+    default: ${{ github.run_attempt }}
+  head-sha:
+    description: "Commit SHA"
+    required: false
+    default: ${{ github.event.pull_request.head.sha || github.sha }}
+  head-branch:
+    description: "Branch name"
+    required: false
+    default: ${{ github.head_ref || github.ref_name }}
+  job-name:
+    description: "Job name recorded with the results"
+    required: false
+    default: ${{ github.job }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FG_API_URL: ${{ inputs.api-url }}
+        FG_API_KEY: ${{ inputs.api-key }}
+        FG_REPORT_PATH: ${{ inputs.report-path }}
+        FG_REPOSITORY: ${{ inputs.repository }}
+        FG_RUN_ID: ${{ inputs.run-id }}
+        FG_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        FG_HEAD_SHA: ${{ inputs.head-sha }}
+        FG_HEAD_BRANCH: ${{ inputs.head-branch }}
+        FG_JOB_NAME: ${{ inputs.job-name }}
+      run: node "${{ github.action_path }}/upload.mjs"
+
+branding:
+  icon: "activity"
+  color: "orange"
