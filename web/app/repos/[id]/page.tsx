@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { api, type RepoDetail } from "@/lib/api";
+import { api, type RepoClusters, type RepoDetail } from "@/lib/api";
 import { CategoryBadge, Ribbon } from "@/lib/components";
 import { pct, relativeTime } from "@/lib/ui";
 
@@ -30,8 +30,11 @@ export default async function RepoPage({
   const { id } = await params;
 
   let detail: RepoDetail;
+  let clusters: RepoClusters | null = null;
   try {
     detail = await api<RepoDetail>(`/api/repos/${id}/tests`);
+    // Root-cause clustering is additive; never block the page on it.
+    clusters = await api<RepoClusters>(`/api/repos/${id}/clusters`).catch(() => null);
   } catch {
     return (
       <main className="mx-auto max-w-6xl px-6 py-10">
@@ -83,6 +86,40 @@ export default async function RepoPage({
             <span><b>{count("stable")}</b> stable</span>
             <span><b className="text-zinc-400">{count("insufficient")}</b> no data</span>
           </div>
+
+          {/* Root-cause clustering */}
+          {clusters && clusters.totalFailures > 0 && (
+            <section className="mb-6 rounded-xl border border-zinc-200 bg-white p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-zinc-700">
+                  Top failure causes
+                </h2>
+                <span className="text-xs text-zinc-400">
+                  {clusters.totalFailures} recorded failures, grouped by signature
+                </span>
+              </div>
+              <ul className="space-y-2">
+                {clusters.clusters.map((c) => (
+                  <li key={c.error_class} className="text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-xs font-medium text-zinc-700">
+                        {c.error_class}
+                      </span>
+                      <span className="shrink-0 text-xs tabular-nums text-zinc-500">
+                        {c.share_pct}% ({c.failures})
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+                      <div
+                        className="h-full rounded-full bg-red-400"
+                        style={{ width: `${Math.min(100, c.share_pct)}%` }}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">
             <table className="w-full min-w-[900px] text-left text-sm">

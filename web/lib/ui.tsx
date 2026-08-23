@@ -48,3 +48,53 @@ export function pct(value: number | null | undefined, digits = 0): string {
   if (value === null || value === undefined) return "–";
   return `${(value * 100).toFixed(digits)}%`;
 }
+
+export function formatDuration(start: string | null, end: string | null): string {
+  if (!start || !end) return "–";
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms < 0) return "–";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}m ${rem}s`;
+}
+
+/** Humanize a millisecond duration (e.g. CI-waste totals). */
+export function formatMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || ms <= 0) return "–";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return `${h}h ${rem}m`;
+}
+
+/** Confidence label derived from how many runs the score is based on. */
+export function confidence(windowSize: number | null | undefined): string {
+  if (!windowSize) return "Low";
+  if (windowSize < 8) return "Low";
+  if (windowSize < 15) return "Medium";
+  return "High";
+}
+
+export function healthTone(status: string): { dot: string; text: string } {
+  switch (status) {
+    case "connected":
+    case "receiving":
+    case "working":
+    case "ok":
+      return { dot: "bg-emerald-500", text: "text-emerald-700" };
+    case "degraded":
+    case "idle":
+    case "not_configured":
+      return { dot: "bg-amber-500", text: "text-amber-700" };
+    case "down":
+    case "not_installed":
+      return { dot: "bg-red-500", text: "text-red-700" };
+    default:
+      return { dot: "bg-zinc-300", text: "text-zinc-500" };
+  }
+}

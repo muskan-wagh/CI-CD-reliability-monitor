@@ -5,6 +5,7 @@ import { migrate } from "./db/migrate.js";
 import { PostgresDeliveryStore } from "./db/postgresDeliveryStore.js";
 import { createWebhookProcessor } from "./lib/processWebhook.js";
 import { processIngest } from "./lib/ingest.js";
+import { verifyApiKey } from "./lib/apiKeys.js";
 
 const config = loadConfig();
 
@@ -21,10 +22,10 @@ const app = buildApp(
     deliveryStore: new PostgresDeliveryStore(pool),
     processor: createWebhookProcessor(pool),
     ingest: {
-      apiKey: config.ingestApiKey,
+      verifyKey: (rawKey) => verifyApiKey(pool, rawKey),
       processIngest: (input) => processIngest(pool, input),
     },
-    api: { pool },
+    api: { pool, sessionSecret: config.sessionSecret },
   },
 );
 

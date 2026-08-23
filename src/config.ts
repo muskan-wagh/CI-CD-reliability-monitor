@@ -11,7 +11,11 @@ export interface Config extends AppConfig {
   port: number;
   host: string;
   databaseUrl: string;
-  ingestApiKey: string;
+  /**
+   * Shared HMAC secret for dashboard session tokens (frontend + API). When
+   * unset, the API runs in unauthenticated "dev" mode.
+   */
+  sessionSecret?: string;
   /** Optional: enables PR annotation (Phase 5). Absent -> annotation disabled. */
   githubAppId?: string;
   privateKeyPath?: string;
@@ -43,7 +47,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const githubWebhookSecret = requireEnv(env, "GITHUB_WEBHOOK_SECRET");
   const databaseUrl = requireEnv(env, "DATABASE_URL");
-  const ingestApiKey = requireEnv(env, "INGEST_API_KEY");
 
   const rawPort = env.PORT ?? "3000";
   const port = Number.parseInt(rawPort, 10);
@@ -62,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port,
     host,
     databaseUrl,
-    ingestApiKey,
+    sessionSecret: env.SESSION_SECRET || undefined,
     githubAppId: githubAppId || undefined,
     privateKeyPath: privateKeyPath || undefined,
     dashboardUrl: env.DASHBOARD_URL || undefined,

@@ -40,6 +40,10 @@ inputs:
     description: "Job name recorded with the results"
     required: false
     default: ${{ github.job }}
+  workflow-name:
+    description: "Workflow name recorded with the run"
+    required: false
+    default: ${{ github.workflow }}
 
 runs:
   using: composite
@@ -55,6 +59,7 @@ runs:
         FG_HEAD_SHA: ${{ inputs.head-sha }}
         FG_HEAD_BRANCH: ${{ inputs.head-branch }}
         FG_JOB_NAME: ${{ inputs.job-name }}
+        FG_WORKFLOW_NAME: ${{ inputs.workflow-name }}
       run: node "${{ github.action_path }}/upload.mjs"
 
 branding:

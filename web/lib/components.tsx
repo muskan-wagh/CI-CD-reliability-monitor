@@ -40,3 +40,31 @@ export function CategoryBadge({ category }: { category: string | null }) {
     </span>
   );
 }
+
+/** Small colored status dot + label, used in the system-health strip. */
+export function StatusDot({ tone, label }: { tone: string; label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`h-2 w-2 shrink-0 rounded-full ${tone}`} />
+      <span className="text-sm text-zinc-700">{label}</span>
+    </div>
+  );
+}
+
+/** Workflow-run conclusion badge. */
+export function ConclusionBadge({ conclusion }: { conclusion: string | null }) {
+  if (!conclusion) {
+    return <span className="text-xs text-zinc-400">–</span>;
+  }
+  const tone =
+    conclusion === "success"
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+      : conclusion === "failure"
+        ? "bg-red-50 text-red-700 ring-red-200"
+        : "bg-zinc-100 text-zinc-600 ring-zinc-200";
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium capitalize ring-1 ring-inset ${tone}`}>
+      {conclusion}
+    </span>
+  );
+}

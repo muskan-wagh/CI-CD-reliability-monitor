@@ -43,6 +43,7 @@ async function main() {
     head_sha: env("FG_HEAD_SHA"),
     head_branch: env("FG_HEAD_BRANCH"),
     job_name: env("FG_JOB_NAME") || "test",
+    workflow_name: env("FG_WORKFLOW_NAME") || undefined,
     report: xml,
   };
 

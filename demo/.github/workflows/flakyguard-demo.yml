@@ -1,0 +1,41 @@
+# FlakyGuard demo workflow.
+#
+# This is the canonical "does it actually work?" demo. It runs a deterministic
+# flaky test (`testLogin` fails when the run number is a multiple of 3) and
+# uploads the JUnit report to FlakyGuard.
+#
+# Trigger a run:
+#   1. Configure two secrets/vars on the repo:
+#        vars.FLAKYGUARD_API_URL   -> https://<your-flakyguard-host>   (or http://localhost:3000 via tunnel)
+#        secrets.FLAKYGUARD_API_KEY -> the INGEST_API_KEY from your .env
+#   2. Then either:
+#        - push a commit (run number increments each time), or
+#        - run it manually N times:
+#            gh workflow run flakyguard-demo.yml
+#        (the outcome depends only on GITHUB_RUN_NUMBER, so ~10 runs give a
+#         clear flaky score without any randomness)
+name: FlakyGuard Demo CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run deterministic flaky tests (writes junit.xml)
+        run: node demo/flaky-tests.mjs
+      - name: Upload results to FlakyGuard
+        if: always()
+        continue-on-error: true
+        uses: ./action
+        with:
+          report-path: junit.xml
+          api-url: ${{ vars.FLAKYGUARD_API_URL }}
+          api-key: ${{ secrets.FLAKYGUARD_API_KEY }}

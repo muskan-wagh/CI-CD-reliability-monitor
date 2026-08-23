@@ -8,6 +8,7 @@ import {
   bulkInsertTestResults,
   bulkUpsertFailureSignatures,
   bulkUpsertTests,
+  recordActivityEvent,
   upsertRepository,
   upsertWorkflowRun,
   type TestInput,
@@ -23,6 +24,9 @@ export interface IngestInput {
   headBranch?: string | null;
   jobName?: string;
   executedAt?: string;
+  workflowName?: string | null;
+  /** Resolved from the ingest API key; enforced so a key can only write its own installation's repos. */
+  installationId?: number | null;
   reportXml: string;
 }
 
@@ -31,6 +35,14 @@ export interface IngestSummary {
   passed: number;
   failed: number;
   skipped: number;
+}
+
+/** Thrown when an ingest key tries to write a repository it does not own. */
+export class CrossTenantIngestError extends Error {
+  constructor(repository: string) {
+    super(`repository "${repository}" does not belong to this installation`);
+    this.name = "CrossTenantIngestError";
+  }
 }
 
 /**
@@ -49,6 +61,7 @@ export async function processIngest(
   input: IngestInput,
 ): Promise<IngestSummary> {
   const parsed = parseJunit(input.reportXml);
+  console.log(`[INGEST] ${parsed.length} test results received for ${input.repositoryFullName} (run #${input.githubRunId})`);
 
   const client = await pool.connect();
   let testIds: number[] = [];
@@ -58,9 +71,25 @@ export async function processIngest(
   try {
     await client.query("BEGIN");
 
+    // Tenant ownership: a key may only write repositories bound to (or not yet
+    // claimed by) its own installation. Prevents cross-tenant ingest spoofing.
+    if (input.installationId != null) {
+      const existing = await client.query<{ installation_id: string | number | null }>(
+        `SELECT installation_id FROM repositories WHERE full_name = $1`,
+        [input.repositoryFullName],
+      );
+      const ownerId = existing.rows[0]?.installation_id;
+      const ownerNum =
+        typeof ownerId === "number" ? ownerId : ownerId == null ? null : Number(ownerId);
+      if (ownerNum != null && ownerNum !== input.installationId) {
+        throw new CrossTenantIngestError(input.repositoryFullName);
+      }
+    }
+
     const repositoryId = await upsertRepository(client, {
       fullName: input.repositoryFullName,
       githubRepoId: input.githubRepoId ?? null,
+      installationId: input.installationId ?? null,
     });
 
     workflowRunId = await upsertWorkflowRun(client, {
@@ -69,6 +98,7 @@ export async function processIngest(
       runAttempt: input.runAttempt,
       headSha: input.headSha,
       headBranch: input.headBranch ?? null,
+      workflowName: input.workflowName ?? null,
     });
 
     const executedAt = input.executedAt ? new Date(input.executedAt) : new Date();
@@ -170,7 +200,16 @@ export async function processIngest(
       [workflowRunId],
     );
 
+    await recordActivityEvent(client, {
+      kind: "workflow",
+      entityKey: `run:${input.repositoryFullName}:${input.githubRunId}:${input.runAttempt}`,
+      repositoryFullName: input.repositoryFullName,
+      message: `workflow #${input.githubRunId} processed — ${parsed.length} tests, ${failed} failed`,
+    });
+
     await client.query("COMMIT");
+    console.log(`[PARSE] ${parsed.length} tests parsed`);
+    console.log(`[DB] ${results.length} results stored (${passed} passed / ${failed} failed / ${skipped} skipped)`);
     summary = { testsReceived: parsed.length, passed, failed, skipped };
   } catch (err) {
     await client.query("ROLLBACK");

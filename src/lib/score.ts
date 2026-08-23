@@ -1,7 +1,12 @@
 import type { Pool } from "pg";
 import type { Queryable } from "./store.js";
+import { recordActivityEvent } from "./store.js";
 import type { TestStatus } from "./junit.js";
 import { WINDOW_SIZE, computeFlakeScore } from "./scoring.js";
+import { investigateTest } from "./aiInvestigation.js";
+
+/** Categories that count as "became unreliable" for activity + AI triggers. */
+const PROBLEMATIC = new Set(["flaky", "critical", "broken"]);
 
 function round4(value: number): number {
   return Math.round(value * 10_000) / 10_000;
@@ -33,9 +38,15 @@ export async function loadOutcomes(
 export async function computeAndUpsertScore(
   db: Queryable,
   testId: number,
-): Promise<void> {
+): Promise<boolean> {
   const outcomes = await loadOutcomes(db, testId);
   const s = computeFlakeScore(outcomes);
+
+  const previous = await db.query<{ category: string }>(
+    `SELECT category::text AS category FROM flake_scores WHERE test_id = $1`,
+    [testId],
+  );
+  const previousCategory = previous.rows[0]?.category ?? null;
 
   await db.query(
     `INSERT INTO flake_scores
@@ -62,32 +73,78 @@ export async function computeAndUpsertScore(
       s.wilsonLower === null ? null : round4(s.wilsonLower),
     ],
   );
+
+  const meta = await db.query<{ name: string; full_name: string }>(
+    `SELECT t.name, r.full_name FROM tests t JOIN repositories r ON r.id = t.repository_id WHERE t.id = $1`,
+    [testId],
+  );
+  const name = meta.rows[0]?.name ?? `#${testId}`;
+  console.log(`[SCORE] ${name} = ${s.score} ${s.category.toUpperCase()}`);
+
+  // Record a one-shot "became flaky/critical/broken" activity event on the
+  // crossing (previously non-problematic -> now problematic).
+  const crossed =
+    PROBLEMATIC.has(s.category) &&
+    (!previousCategory || !PROBLEMATIC.has(previousCategory));
+  if (crossed) {
+    const verb =
+      s.category === "critical"
+        ? "became critical"
+        : s.category === "broken"
+          ? "became broken"
+          : "became flaky";
+    await recordActivityEvent(db, {
+      kind: "flaky",
+      entityKey: `test:${testId}`,
+      repositoryFullName: meta.rows[0]?.full_name ?? "",
+      message: `${name} ${verb} (score ${s.score})`,
+    });
+  }
+  return crossed;
 }
 
-/** Recompute scores for a set of affected tests (deduplicated). */
+/** Recompute scores for a set of affected tests. Returns ids that crossed INTO flaky/critical/broken. */
 export async function recomputeScores(
   db: Queryable,
   testIds: number[],
-): Promise<void> {
+): Promise<number[]> {
   const unique = [...new Set(testIds)];
+  const crossed: number[] = [];
   for (const testId of unique) {
-    await computeAndUpsertScore(db, testId);
+    if (await computeAndUpsertScore(db, testId)) crossed.push(testId);
   }
+  return crossed;
 }
 
 /**
  * Recompute scores on a dedicated connection, used for the async (fire-and-
  * forget) scoring path after ingest commits.
+ *
+ * Cost control (Phase E): when AI_AUTO_INVESTIGATE=true, tests that just
+ * crossed into a problematic category get ONE cached AI investigation each —
+ * identical contexts are served from cicd_ai_investigations, never re-billed.
  */
 export async function scoreTests(
   pool: Pool,
   testIds: number[],
 ): Promise<void> {
   if (testIds.length === 0) return;
+  let crossed: number[] = [];
   const client = await pool.connect();
   try {
-    await recomputeScores(client, testIds);
+    crossed = await recomputeScores(client, testIds);
   } finally {
     client.release();
+  }
+
+  if (process.env.AI_AUTO_INVESTIGATE !== "true" || crossed.length === 0) return;
+  for (const testId of crossed) {
+    void investigateTest(pool, testId)
+      .then((r) =>
+        console.log(
+          `[AI] test ${testId} investigated (${r.provider}/${r.model}${r.cached ? ", cached" : ""}) → ${r.investigation.classification}`,
+        ),
+      )
+      .catch((err) => console.error(`[AI] investigation failed for test ${testId}: ${(err as Error).message}`));
   }
 }

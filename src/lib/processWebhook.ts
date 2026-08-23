@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { Pool } from "pg";
+import { issueApiKey, revokeApiKeys } from "./apiKeys.js";
 import { upsertRepository, upsertWorkflowRun } from "./store.js";
 
 export interface WebhookEnvelope {
@@ -58,12 +59,17 @@ async function handleInstallation(
         installationId: id,
       });
     }
+
+    // Mint the installation's ingest API key (plaintext visible only here; the
+    // dashboard reveals/rotates it later). Hash is what we persist.
+    await issueApiKey(db, id);
     logger.info({ installationId: id }, "installation created");
   } else if (action === "deleted") {
     await db.query(
       `UPDATE installations SET status = 'removed', removed_at = now() WHERE id = $1`,
       [id],
     );
+    await revokeApiKeys(db, id);
     logger.info({ installationId: id }, "installation removed");
   }
 }
@@ -73,9 +79,9 @@ async function handleWorkflowRun(
   payload: JsonRecord,
   logger: FastifyBaseLogger,
 ): Promise<void> {
+  const run = asRecord(payload.workflow_run);
   if (payload.action !== "completed") return;
 
-  const run = asRecord(payload.workflow_run);
   if (typeof run.id !== "number") return;
 
   const repo = asRecord(run.repository);
@@ -95,6 +101,8 @@ async function handleWorkflowRun(
     );
   }
 
+  console.log(`[WEBHOOK] workflow_run.completed received (run #${run.id}, ${repo.full_name})`);
+
   const repositoryId = await upsertRepository(db, {
     githubRepoId: typeof repo.id === "number" ? repo.id : null,
     fullName: repo.full_name,
@@ -111,7 +119,10 @@ async function handleWorkflowRun(
     conclusion: typeof run.conclusion === "string" ? run.conclusion : null,
     startedAt: typeof run.created_at === "string" ? run.created_at : null,
     completedAt: typeof run.updated_at === "string" ? run.updated_at : null,
+    workflowName: typeof run.name === "string" ? run.name : null,
   });
+
+  console.log(`[RUN] workflow #${run.id} stored (${repo.full_name}, ${run.conclusion ?? "unknown"})`);
 
   logger.info(
     { runId: run.id, conclusion: run.conclusion, repo: repo.full_name },

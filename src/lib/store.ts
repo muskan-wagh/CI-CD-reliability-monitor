@@ -39,6 +39,7 @@ export interface WorkflowRunInput {
   conclusion?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
+  workflowName?: string | null;
 }
 
 /** Idempotent workflow-run upsert; the (repo, run, attempt) unique key is the backbone. */
@@ -48,15 +49,16 @@ export async function upsertWorkflowRun(
 ): Promise<number> {
   const result = await db.query<{ id: string }>(
     `INSERT INTO workflow_runs
-       (repository_id, github_run_id, run_attempt, head_sha, head_branch, trigger_event, conclusion, started_at, completed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (repository_id, github_run_id, run_attempt, head_sha, head_branch, trigger_event, conclusion, started_at, completed_at, workflow_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (repository_id, github_run_id, run_attempt) DO UPDATE SET
        head_sha      = EXCLUDED.head_sha,
        head_branch   = COALESCE(EXCLUDED.head_branch, workflow_runs.head_branch),
        trigger_event = COALESCE(EXCLUDED.trigger_event, workflow_runs.trigger_event),
        conclusion    = COALESCE(EXCLUDED.conclusion, workflow_runs.conclusion),
        started_at    = COALESCE(EXCLUDED.started_at, workflow_runs.started_at),
-       completed_at  = COALESCE(EXCLUDED.completed_at, workflow_runs.completed_at)
+       completed_at  = COALESCE(EXCLUDED.completed_at, workflow_runs.completed_at),
+       workflow_name = COALESCE(EXCLUDED.workflow_name, workflow_runs.workflow_name)
      RETURNING id`,
     [
       input.repositoryId,
@@ -68,6 +70,7 @@ export async function upsertWorkflowRun(
       input.conclusion ?? null,
       input.startedAt ?? null,
       input.completedAt ?? null,
+      input.workflowName ?? null,
     ],
   );
   const id = Number(result.rows[0]?.id);
@@ -251,5 +254,28 @@ export async function upsertPrAnnotation(
        body_snapshot = EXCLUDED.body_snapshot,
        posted_at     = now()`,
     [input.repositoryId, input.prNumber, input.commentId, input.bodySnapshot],
+  );
+}
+
+export interface ActivityEventInput {
+  kind: string;
+  entityKey: string;
+  repositoryFullName: string;
+  message: string;
+}
+
+/**
+ * Record a one-shot activity-feed event (e.g. "test X became flaky").
+ * The (kind, entity_key) unique key makes this idempotent under re-processing.
+ */
+export async function recordActivityEvent(
+  db: Queryable,
+  input: ActivityEventInput,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO activity_events (kind, entity_key, repository_full_name, message)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (kind, entity_key) DO NOTHING`,
+    [input.kind, input.entityKey, input.repositoryFullName, input.message],
   );
 }

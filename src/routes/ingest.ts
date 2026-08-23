@@ -1,17 +1,14 @@
-import { timingSafeEqual } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
-import type { IngestInput, IngestSummary } from "../lib/ingest.js";
+import {
+  CrossTenantIngestError,
+  type IngestInput,
+  type IngestSummary,
+} from "../lib/ingest.js";
 
 export interface IngestOptions {
-  apiKey: string;
+  /** Resolve an installation id from a raw API key (null = invalid/revoked). */
+  verifyKey: (rawKey: string) => Promise<number | null>;
   processIngest: (input: IngestInput) => Promise<IngestSummary>;
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
 }
 
 function parsePositiveInt(value: unknown, fallback: number): number {
@@ -21,16 +18,24 @@ function parsePositiveInt(value: unknown, fallback: number): number {
   return value;
 }
 
+function bearerToken(auth: string | undefined): string {
+  if (!auth) return "";
+  const m = /^Bearer\s+(.+)$/i.exec(auth);
+  return m?.[1] ?? "";
+}
+
 /**
  * Receives JUnit XML test reports from the flakyguard-action step.
- * Auth is a shared API key for now; per-installation key hashing arrives with
- * the dashboard phase.
+ *
+ * Auth is a per-installation API key: the key resolves the caller's
+ * installation, which both authorizes the request and scopes which
+ * repositories it may write (see CrossTenantIngestError).
  */
 const ingestPlugin: FastifyPluginAsync<IngestOptions> = async (app, options) => {
   app.post("/v1/ingest", async (request, reply) => {
-    const auth = request.headers.authorization;
-    const expected = `Bearer ${options.apiKey}`;
-    if (!auth || !safeEqual(auth, expected)) {
+    const rawKey = bearerToken(request.headers.authorization);
+    const installationId = await options.verifyKey(rawKey);
+    if (installationId === null) {
       return reply.code(401).send({ error: "invalid_api_key" });
     }
 
@@ -65,15 +70,20 @@ const ingestPlugin: FastifyPluginAsync<IngestOptions> = async (app, options) => 
       headBranch: typeof body.head_branch === "string" ? body.head_branch : null,
       jobName: typeof body.job_name === "string" ? body.job_name : undefined,
       executedAt: typeof body.executed_at === "string" ? body.executed_at : undefined,
+      workflowName: typeof body.workflow_name === "string" ? body.workflow_name : null,
+      installationId,
       reportXml,
     };
 
-    const summary = await options.processIngest(input);
-
-    return reply.code(202).send({
-      status: "accepted",
-      ...summary,
-    });
+    try {
+      const summary = await options.processIngest(input);
+      return reply.code(202).send({ status: "accepted", ...summary });
+    } catch (err) {
+      if (err instanceof CrossTenantIngestError) {
+        return reply.code(403).send({ error: "cross_tenant_ingest", detail: err.message });
+      }
+      throw err;
+    }
   });
 };
 

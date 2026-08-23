@@ -43,6 +43,17 @@ export interface RepoDetail {
   data: LeaderboardTest[];
 }
 
+export interface FailureCluster {
+  error_class: string;
+  failures: number;
+  share_pct: number;
+}
+
+export interface RepoClusters {
+  clusters: FailureCluster[];
+  totalFailures: number;
+}
+
 export interface HistoryOutcome {
   status: "passed" | "failed" | "skipped";
   duration_ms: number | null;
@@ -55,6 +66,12 @@ export interface HistoryOutcome {
   sample_message: string | null;
 }
 
+export interface TimelineEvent {
+  type: "first_seen" | "first_failure" | "became_flaky" | "signature";
+  at: string;
+  message: string;
+}
+
 export interface TestHistory {
   test: {
     id: number;
@@ -63,6 +80,8 @@ export interface TestHistory {
     suite_path: string;
     repository_id: number;
     repository_full_name: string;
+    first_seen_at: string | null;
+    last_seen_at: string | null;
   };
   score: {
     score: number;
@@ -75,6 +94,8 @@ export interface TestHistory {
     previous_score: number | null;
     computed_at: string;
   } | null;
+  transitions: { passToFail: number; failToPass: number };
+  timeline: TimelineEvent[];
   outcomes: HistoryOutcome[];
   signatures: {
     id: number;
@@ -82,15 +103,225 @@ export interface TestHistory {
     sample_message: string;
     occurrence_count: number;
     times_seen_on_test: number;
+    first_seen_on_test: string | null;
   }[];
+}
+
+export interface DashboardStats {
+  total_tests: number;
+  flaky_tests: number;
+  critical_tests: number;
+  broken_tests: number;
+  tests_analyzed: number;
+}
+
+export interface FlakyTestRow {
+  id: number;
+  name: string;
+  file_path: string;
+  repository_id: number;
+  repository: string;
+  score: number;
+  category: Category;
+  failure_rate: number;
+  transition_rate: number;
+  failure_count: number;
+  window_size: number;
+  last_seen: string | null;
+  recent_status: string[];
+  top_error_class: string | null;
+  top_sample_message: string | null;
+  signature_count: number | null;
+}
+
+export interface RecentRun {
+  id: number;
+  repository: string;
+  workflow_name: string | null;
+  github_run_id: string | number;
+  conclusion: string | null;
+  results_state: string;
+  started_at: string | null;
+  completed_at: string | null;
+  test_count: number;
+  flaky_count: number;
+  failed_count: number;
+}
+
+export interface ActivityItem {
+  key: string;
+  type: string;
+  repository: string;
+  message: string;
+  at: string;
+}
+
+export interface Reliability {
+  score: number | null;
+  previous: number | null;
+  analyzed: number;
+}
+
+export interface TrendItem {
+  id: number;
+  name: string;
+  file_path: string;
+  repository: string;
+  score: number;
+  previous_score: number | null;
+  category: Category;
+  delta: number;
+  failure_rate?: number;
+  computed_at?: string;
+}
+
+export interface CiWaste {
+  failed_duration_ms: number;
+  failed_results: number;
+  flaky_duration_ms: number;
+}
+
+export interface Dashboard {
+  stats: DashboardStats;
+  reliability: Reliability;
+  mostFlakyTests: FlakyTestRow[];
+  newlyFlaky: TrendItem[];
+  trendingWorse: TrendItem[];
+  trendingBetter: TrendItem[];
+  ciWaste: CiWaste;
+  recentRuns: RecentRun[];
+  recentActivity: ActivityItem[];
+}
+
+export interface AiInvestigation {
+  summary: string;
+  classification: "CONFIRMED" | "LIKELY" | "POSSIBLE" | "UNKNOWN";
+  likely_cause: string;
+  confidence: number;
+  evidence: string[];
+  possible_causes: string[];
+  recommended_actions: string[];
+}
+
+export interface InvestigateResponse {
+  cached: boolean;
+  provider: string;
+  model: string;
+  investigation: AiInvestigation;
+}
+
+export interface LatestInvestigation {
+  investigation:
+    | {
+        provider: string;
+        model: string;
+        classification: string | null;
+        confidence: number | null;
+        result: AiInvestigation;
+        created_at: string;
+      }
+    | null;
+}
+
+export interface HealthCheck {
+  status: string;
+  [key: string]: unknown;
+}
+
+export interface Health {
+  status: "ok" | "degraded";
+  checks: {
+    githubApp: { status: string; credentialsConfigured: boolean; installations: number };
+    database: { status: string };
+    webhook: { status: string; deliveries: number; lastDelivery: string | null };
+    ingestion: { status: string; resultsStored: number };
+    scoring: { status: string; testsScored: number };
+  };
+}
+
+export interface DebugStatus {
+  installations: number;
+  repositories: number;
+  workflow_runs: number;
+  tests: number;
+  test_results: number;
+  flake_scores: number;
+  flaky_tests: number;
+  failure_signatures: number;
+  webhook_deliveries: number;
 }
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
+/**
+ * Session auth headers for server-side calls to the FlakyGuard API. When auth
+ * is enabled (SESSION_SECRET set), the signed session cookie is forwarded as a
+ * Bearer token; the API verifies it independently.
+ */
+export async function sessionAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (process.env.SESSION_SECRET) {
+    const { cookies } = await import("next/headers");
+    const cookieStore = await cookies();
+    const token = cookieStore.get("flakyguard_session")?.value;
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+interface ForwardedResponse<T> {
+  status: number;
+  body: T | null;
+}
+
+/** POST/GET passthrough for Next route handlers (session-aware, error-mapped). */
+export async function apiForward<T>(
+  path: string,
+  method: "GET" | "POST" = "GET",
+  body?: unknown,
+): Promise<ForwardedResponse<T>> {
+  const headers = {
+    ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    ...(await sessionAuthHeaders()),
+  };
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method,
+      cache: "no-store",
+      headers,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    const parsed = res.status === 204 ? null : ((await res.json().catch(() => null)) as T | null);
+    return { status: res.status, body: parsed };
+  } catch {
+    return {
+      status: 502,
+      body: { error: "api_unreachable", detail: `Could not reach ${API_URL}` } as unknown as T,
+    };
+  }
+}
+
+/**
+ * Fetch a JSON endpoint from the FlakyGuard API. Throws a descriptive error on
+ * non-2xx responses so callers can distinguish "API down" from "empty data".
+ *
+ * When auth is enabled (SESSION_SECRET set), the signed session cookie is
+ * forwarded to the API as a Bearer token; the API verifies it independently.
+ */
 export async function api<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      cache: "no-store",
+      headers: await sessionAuthHeaders(),
+    });
+  } catch {
+    throw new Error(
+      `Could not reach the FlakyGuard API at ${API_URL}. Is the backend running? (npm run dev)`,
+    );
+  }
   if (!res.ok) {
-    throw new Error(`API ${path} failed: ${res.status}`);
+    throw new Error(`API ${path} failed: HTTP ${res.status}`);
   }
   return (await res.json()) as T;
 }

@@ -9,6 +9,8 @@
     "start": "tsx src/server.ts",
     "db:migrate": "tsx src/db/migrate-run.ts",
     "dashboard": "npm run dev --prefix web",
+    "demo": "tsx scripts/demo.ts",
+    "db:status": "tsx scripts/status.ts",
     "test": "node --import tsx --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=junit.xml test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
