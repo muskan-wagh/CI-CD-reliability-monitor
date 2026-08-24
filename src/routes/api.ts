@@ -6,6 +6,8 @@ import { buildFailureEvidence } from "../lib/evidence.js";
 import { investigateTest } from "../lib/aiInvestigation.js";
 import { AiNotConfiguredError } from "../lib/ai/index.js";
 import { getPrsByShas } from "../lib/prCorrelation.js";
+import { muteTest, liftMute, getActiveMute, type MuteKind } from "../lib/mutes.js";
+import { getCodeownersRules, ownersForPath, aggregateOwnership } from "../lib/codeowners.js";
 import { loadGithubAppCredentials, createInstallationClient } from "../lib/githubApp.js";
 import { issueTitle, renderIssueBody } from "../lib/issueTemplate.js";
 import type { AiInvestigation } from "../lib/ai/types.js";
@@ -25,6 +27,8 @@ declare module "fastify" {
   interface FastifyRequest {
     /** Caller's installation ids, or null in dev mode (access to everything). */
     installations: number[] | null;
+    /** GitHub login from the verified session ("local-dev" in dev mode). */
+    userLogin: string;
   }
 }
 
@@ -48,6 +52,7 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
   ): Promise<void> => {
     if (!sessionSecret) {
       request.installations = null;
+      request.userLogin = "local-dev";
       return;
     }
     const session = verifySessionToken(bearerToken(request.headers.authorization), sessionSecret);
@@ -56,6 +61,7 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
       return;
     }
     request.installations = session.installations;
+    request.userLogin = session.login;
   };
 
   // Shared ownership guard for single-resource routes: 404 when the resource's
@@ -158,9 +164,17 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
              hist.recent_outcomes,
              sig.top_error_class,
              sig.top_sample_message,
-             lf.last_failed_at
+             lf.last_failed_at,
+             m.kind::text                            AS mute_kind,
+             m.reason                                AS mute_reason
       FROM tests t
       LEFT JOIN flake_scores s ON s.test_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT kind, reason FROM test_mutes m
+        WHERE m.test_id = t.id AND m.lifted_at IS NULL
+          AND (m.expires_at IS NULL OR m.expires_at > now())
+        ORDER BY created_at DESC LIMIT 1
+      ) m ON TRUE
       LEFT JOIN LATERAL (
         SELECT array_agg(x.status::text ORDER BY x.executed_at DESC, x.id DESC) AS recent_outcomes
         FROM (
@@ -189,11 +203,27 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
     );
 
     // recent_outcomes arrives newest-first; reverse to oldest->newest.
+    // Phase J: attach CODEOWNERS-derived owners (null when unavailable).
+    const repoInstallationId =
+      repo.rows[0].installation_id === null ? null : Number(repo.rows[0].installation_id);
+    const ownerRules = await getCodeownersRules(
+      pool,
+      Number(repo.rows[0].id),
+      repo.rows[0].full_name,
+      repoInstallationId,
+    );
     const data = (tests.rows as Record<string, unknown>[]).map((row) => ({
       ...row,
       recent_outcomes: Array.isArray(row.recent_outcomes)
         ? [...(row.recent_outcomes as string[])].reverse()
         : [],
+      owners: ownersForPath(ownerRules, String(row.file_path ?? "")),
+      mute:
+        row.mute_kind != null
+          ? { kind: row.mute_kind, reason: row.mute_reason ?? null }
+          : null,
+      mute_kind: undefined,
+      mute_reason: undefined,
     }));
 
     return { repo: { id: repo.rows[0].id, full_name: repo.rows[0].full_name }, data };
@@ -377,6 +407,7 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
       },
       score: score.rows[0] ?? null,
       transitions: { passToFail, failToPass },
+      mute: await getActiveMute(pool, testId),
       timeline: events,
       prsBySha,
       outcomes: outcomes.rows,
@@ -577,6 +608,78 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
     }
   });
 
+  // ── Mute / quarantine (Phase I): acknowledge a known-flaky test without
+  //    losing history. Scoring continues; Action Center prominence stops. ──
+  app.post("/api/tests/:id/mute", { preHandler: authPreHandler }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const testId = Number(params.id);
+    if (!Number.isInteger(testId)) {
+      return reply.code(400).send({ error: "invalid_test_id" });
+    }
+    const body = (request.body ?? {}) as {
+      kind?: unknown;
+      reason?: unknown;
+      expiresInDays?: unknown;
+    };
+    const kind: MuteKind = body.kind === "quarantined" ? "quarantined" : "muted";
+    const reason = typeof body.reason === "string" ? body.reason.slice(0, 500) : null;
+    const expiresInDays =
+      typeof body.expiresInDays === "number" && body.expiresInDays > 0
+        ? Math.min(365, Math.round(body.expiresInDays))
+        : null;
+
+    const own = await pool.query(
+      `SELECT r.installation_id FROM tests t JOIN repositories r ON r.id = t.repository_id WHERE t.id = $1`,
+      [testId],
+    );
+    if (own.rows.length === 0) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    if (
+      !assertInstallationAccess(
+        request,
+        reply,
+        own.rows[0].installation_id === null ? null : Number(own.rows[0].installation_id),
+      )
+    ) {
+      return;
+    }
+    const mute = await muteTest(pool, {
+      testId,
+      kind,
+      reason,
+      createdBy: request.userLogin,
+      expiresInDays,
+    });
+    return { mute };
+  });
+
+  app.delete("/api/tests/:id/mute", { preHandler: authPreHandler }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const testId = Number(params.id);
+    if (!Number.isInteger(testId)) {
+      return reply.code(400).send({ error: "invalid_test_id" });
+    }
+    const own = await pool.query(
+      `SELECT r.installation_id FROM tests t JOIN repositories r ON r.id = t.repository_id WHERE t.id = $1`,
+      [testId],
+    );
+    if (own.rows.length === 0) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    if (
+      !assertInstallationAccess(
+        request,
+        reply,
+        own.rows[0].installation_id === null ? null : Number(own.rows[0].installation_id),
+      )
+    ) {
+      return;
+    }
+    await liftMute(pool, testId);
+    return { muted: false };
+  });
+
   // Latest cached investigation for this test (fuel for the AI UI panel).
   app.get("/api/tests/:id/investigation", { preHandler: authPreHandler }, async (request, reply) => {
     const params = request.params as { id: string };
@@ -714,7 +817,18 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
              hist.recent_status,
              sig.top_error_class,
              sig.top_sample_message,
-             sigcount.signature_count
+             sigcount.signature_count,
+             unreliable.first_unreliable_at,
+             first_failure.first_failure_at,
+             first_failure.first_failure_sha,
+             pr.first_failure_pr_number,
+             pr.first_failure_pr_title,
+             pr.first_failure_changed_files,
+             ai.latest_result AS ai_result,
+             ai.provider AS ai_provider,
+             ai.model AS ai_model,
+             ai.classification AS ai_classification,
+             ai.confidence AS ai_confidence
       FROM flake_scores s
       JOIN tests t ON t.id = s.test_id
       JOIN repositories r ON r.id = t.repository_id
@@ -740,9 +854,73 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
         JOIN test_results tr ON tr.failure_signature_id = fs.id
         WHERE tr.test_id = t.id
       ) sigcount ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT ae.created_at AS first_unreliable_at
+        FROM activity_events ae
+        WHERE ae.kind = 'flaky' AND ae.entity_key = ('test:' || t.id::text)
+        ORDER BY ae.created_at ASC
+        LIMIT 1
+      ) unreliable ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT tr.executed_at AS first_failure_at,
+               w.head_sha AS first_failure_sha
+        FROM test_results tr
+        JOIN workflow_runs w ON w.id = tr.workflow_run_id
+        WHERE tr.test_id = t.id AND tr.status = 'failed'
+        ORDER BY tr.executed_at ASC, tr.id ASC
+        LIMIT 1
+      ) first_failure ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT p.pr_number AS first_failure_pr_number,
+               p.title AS first_failure_pr_title,
+               p.changed_files AS first_failure_changed_files
+        FROM pull_requests p
+        WHERE p.repository_id = r.id
+          AND p.head_sha = first_failure.first_failure_sha
+        ORDER BY p.fetched_at DESC
+        LIMIT 1
+      ) pr ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT c.result AS latest_result,
+               c.provider,
+               c.model,
+               c.classification,
+               c.confidence
+        FROM cicd_ai_investigations c
+        WHERE c.test_id = t.id
+        ORDER BY c.created_at DESC
+        LIMIT 1
+      ) ai ON TRUE
       WHERE s.category IN ('flaky','critical','broken')
         AND ($1::bigint[] IS NULL OR r.installation_id = ANY($1))
+        AND NOT EXISTS (
+          SELECT 1 FROM test_mutes m
+          WHERE m.test_id = t.id
+            AND m.lifted_at IS NULL
+            AND (m.expires_at IS NULL OR m.expires_at > now())
+        )
       ORDER BY s.score DESC, s.computed_at DESC
+      LIMIT 20
+      `,
+      [installations],
+    );
+
+    // Muted/quarantined tests: still analyzed and listed, just not dominant.
+    const mutedTests = await pool.query(
+      `
+      SELECT t.id, t.name, t.file_path, r.full_name AS repository,
+             s.score, s.category::text AS category,
+             m.kind::text AS mute_kind, m.reason AS mute_reason,
+             m.created_by AS mute_created_by,
+             m.expires_at AS mute_expires_at
+      FROM test_mutes m
+      JOIN tests t ON t.id = m.test_id
+      JOIN repositories r ON r.id = t.repository_id
+      LEFT JOIN flake_scores s ON s.test_id = t.id
+      WHERE m.lifted_at IS NULL
+        AND (m.expires_at IS NULL OR m.expires_at > now())
+        AND ($1::bigint[] IS NULL OR r.installation_id = ANY($1))
+      ORDER BY s.score DESC NULLS LAST
       LIMIT 20
       `,
       [installations],
@@ -864,21 +1042,126 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
       [installations],
     );
 
-    // CI waste: failed-test duration, from real duration_ms. No monetary cost
-    // is invented — time is the only unit we can measure honestly.
+    // CI waste (Phase K): measured time only — no monetary cost is invented.
+    // Windowed over recent results so the numbers stay actionable; the window
+    // comes from ?days= (7/30/90, default 30) and is echoed back to the UI.
+    const wasteQuery = request.query as { days?: string };
+    const daysRaw = Number(wasteQuery.days ?? 30);
+    const windowDays = [7, 30, 90].includes(daysRaw) ? daysRaw : 30;
+
+    // Failures followed immediately by a pass on the same test: the classic
+    // "rerun went green" signature of flake-driven waste.
+    const recovered = await pool.query(
+      `
+      SELECT COUNT(*)::int AS recovered_failures
+      FROM (
+        SELECT status,
+               LEAD(status) OVER (PARTITION BY tr.test_id ORDER BY tr.executed_at, tr.id) AS next_status
+        FROM test_results tr
+        JOIN tests t ON t.id = tr.test_id
+        JOIN repositories r ON r.id = t.repository_id
+        WHERE tr.executed_at > now() - ($2::text || ' days')::interval
+          AND ($1::bigint[] IS NULL OR r.installation_id = ANY($1))
+      ) x
+      WHERE x.status = 'failed' AND x.next_status = 'passed'
+      `,
+      [installations, String(windowDays)],
+    );
+
+    // Run-level impact: distinct pipeline runs that contain at least one failed
+    // result on a currently-problematic test, plus their wall-clock duration.
+    const affectedRuns = await pool.query(
+      `
+      SELECT COUNT(DISTINCT w.id)::int AS affected_runs,
+             COALESCE(SUM(EXTRACT(EPOCH FROM (w.completed_at - w.started_at))) FILTER (WHERE w.completed_at IS NOT NULL AND w.started_at IS NOT NULL), 0)::int * 1000 AS affected_wall_ms
+      FROM workflow_runs w
+      WHERE w.completed_at > now() - ($2::text || ' days')::interval
+        AND EXISTS (
+          SELECT 1
+          FROM test_results tr
+          JOIN tests t ON t.id = tr.test_id
+          LEFT JOIN flake_scores s ON s.test_id = t.id
+          WHERE tr.workflow_run_id = w.id
+            AND tr.status = 'failed'
+            AND s.category IN ('flaky','critical','broken')
+        )
+        AND ($1::bigint[] IS NULL OR w.repository_id IN (
+          SELECT id FROM repositories WHERE installation_id IS NULL OR installation_id = ANY($1)
+        ))
+      `,
+      [installations, String(windowDays)],
+    );
+
     const ciWaste = await pool.query(
       `
       SELECT COALESCE(SUM(tr.duration_ms) FILTER (WHERE tr.status = 'failed'), 0)::int AS failed_duration_ms,
              COUNT(*) FILTER (WHERE tr.status = 'failed')::int AS failed_results,
-             COALESCE(SUM(tr.duration_ms) FILTER (WHERE tr.status = 'failed' AND s.category IN ('flaky','critical','broken')), 0)::int AS flaky_duration_ms
+             COALESCE(SUM(tr.duration_ms) FILTER (WHERE tr.status = 'failed' AND s.category IN ('flaky','critical','broken')), 0)::int AS flaky_duration_ms,
+             COALESCE(SUM(tr.duration_ms), 0)::int AS total_duration_ms,
+             COUNT(*)::int AS total_results
       FROM test_results tr
       JOIN tests t ON t.id = tr.test_id
       LEFT JOIN flake_scores s ON s.test_id = t.id
       JOIN repositories r ON r.id = t.repository_id
-      WHERE ($1::bigint[] IS NULL OR r.installation_id = ANY($1))
+      WHERE tr.executed_at > now() - ($2::text || ' days')::interval
+        AND ($1::bigint[] IS NULL OR r.installation_id = ANY($1))
+      `,
+      [installations, String(windowDays)],
+    );
+
+    const waste = {
+      windowDays,
+      failedDurationMs: ciWaste.rows[0]?.failed_duration_ms ?? 0,
+      failedResults: ciWaste.rows[0]?.failed_results ?? 0,
+      flakyDurationMs: ciWaste.rows[0]?.flaky_duration_ms ?? 0,
+      totalDurationMs: ciWaste.rows[0]?.total_duration_ms ?? 0,
+      totalResults: ciWaste.rows[0]?.total_results ?? 0,
+      recoveredFailures: recovered.rows[0]?.recovered_failures ?? 0,
+      affectedRuns: affectedRuns.rows[0]?.affected_runs ?? 0,
+      affectedWallMs: affectedRuns.rows[0]?.affected_wall_ms ?? 0,
+    };
+
+    // Phase J: flaky tests grouped by CODEOWNERS owner (only where GitHub
+    // data provides ownership; nothing is invented).
+    const problemRows = await pool.query(
+      `
+      SELECT t.file_path, r.id AS repository_id, r.full_name, r.installation_id
+      FROM flake_scores s
+      JOIN tests t ON t.id = s.test_id
+      JOIN repositories r ON r.id = t.repository_id
+      WHERE s.category IN ('flaky','critical','broken')
+        AND NOT EXISTS (
+          SELECT 1 FROM test_mutes m WHERE m.test_id = t.id AND m.lifted_at IS NULL
+            AND (m.expires_at IS NULL OR m.expires_at > now())
+        )
+        AND ($1::bigint[] IS NULL OR r.installation_id = ANY($1))
       `,
       [installations],
     );
+
+    const globalCounts = new Map<string, number>();
+    const byRepo = new Map<number, { fullName: string; installationId: number | null; rows: { filePath: string }[] }>();
+    for (const r of problemRows.rows) {
+      const repoId = Number(r.repository_id);
+      if (!byRepo.has(repoId)) {
+        byRepo.set(repoId, {
+          fullName: String(r.full_name),
+          installationId: r.installation_id === null ? null : Number(r.installation_id),
+          rows: [],
+        });
+      }
+      byRepo.get(repoId)!.rows.push({ filePath: String(r.file_path ?? "") });
+    }
+    for (const [repoId, info] of byRepo) {
+      const rules = await getCodeownersRules(pool, repoId, info.fullName, info.installationId);
+      for (const { owner, count } of aggregateOwnership(info.rows, rules)) {
+        globalCounts.set(owner, (globalCounts.get(owner) ?? 0) + count);
+      }
+    }
+    const ownershipSummary = [...globalCounts.entries()]
+      .map(([owner, count]) => ({ owner, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
 
     return {
       stats: stats.rows[0],
@@ -887,9 +1170,10 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
       newlyFlaky: newlyFlaky.rows,
       trendingWorse: trendingWorse.rows,
       trendingBetter: trendingBetter.rows,
-      ciWaste: ciWaste.rows[0],
+      ciWaste: waste,
       recentRuns: recentRuns.rows,
       recentActivity: activity.rows,
+      mutedTests: mutedTests.rows,
     };
   });
 

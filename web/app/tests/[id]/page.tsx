@@ -7,426 +7,84 @@ import {
 } from "@/lib/api";
 import { CategoryBadge, Ribbon } from "@/lib/components";
 import { confidence, pct, relativeTime } from "@/lib/ui";
+import AppShell from "@/components/AppShell";
 import AiPanel from "./AiPanel";
+import MuteButton from "@/components/MuteButton";
 
 export const dynamic = "force-dynamic";
 
-function recommendations(
-  category: string | undefined,
-  topErrorClass: string | undefined,
-): string[] {
-  const out: string[] = [];
-  if (category === "broken") {
-    out.push(
-      "This test has failed consistently — treat it as a regression, not flakiness. Investigate immediately.",
-    );
-  } else if (category === "flaky" || category === "critical") {
-    out.push(
-      "This test flips between pass and fail on identical code — the classic flaky-test signature.",
-    );
-  }
-  switch (topErrorClass) {
-    case "TimeoutError":
-      out.push(
-        "TimeoutError suggests slow operations: check for missing awaits, connection-pool exhaustion, or a slow external service.",
-      );
-      break;
-    case "AssertionError":
-      out.push(
-        "AssertionError suggests a state/ordering bug: check test isolation and shared mutable state.",
-      );
-      break;
-    case "TypeError":
-      out.push(
-        "TypeError suggests a null/undefined access: check the stack trace and recent data changes.",
-      );
-      break;
-    case "ConnectionError":
-      out.push(
-        "ConnectionError suggests infrastructure issues: check service/database availability and network config.",
-      );
-      break;
-    default:
-      if (topErrorClass) {
-        out.push(
-          `Review the "${topErrorClass}" failure message and the commits around when reliability changed (below).`,
-        );
-      }
-  }
-  out.push("Cross-check the recent commits in the timeline below.");
-  return out;
+function recommendations(category: string | undefined, errorClass: string | undefined): string[] {
+  const items: string[] = [];
+  if (category === "broken") items.push("Treat this as a regression, not flakiness: inspect the first failing commit and fix the underlying failure.");
+  if (category === "flaky" || category === "critical") items.push("The test flips between pass and fail. Prioritize the dominant signature before rerunning CI.");
+  if (errorClass === "TimeoutError") items.push("Check timeout configuration, missing awaits, connection-pool usage, and slow external services.");
+  else if (errorClass === "AssertionError") items.push("Check test isolation, shared state, and ordering assumptions around the failing assertion.");
+  else if (errorClass === "TypeError") items.push("Inspect the failing access and the data setup that can leave it null or undefined.");
+  else if (errorClass) items.push(`Review the ${errorClass} message and stack trace against the commits shown below.`);
+  if (items.length === 0) items.push("Collect more runs before drawing a root-cause conclusion.");
+  return items;
+}
+
+function SignalMetric({ label, value, detail, tone = "text-[var(--foreground)]" }: { label: string; value: string | number; detail?: string; tone?: string }) {
+  return <div><p className={`technical text-xl font-bold ${tone}`}>{value}</p><p className="mt-1 text-[11px] text-[var(--muted-foreground)]">{label}</p>{detail && <p className="technical mt-1 text-[10px] text-[var(--muted-foreground)]">{detail}</p>}</div>;
 }
 
 function Timeline({ events }: { events: TimelineEvent[] }) {
-  const dot: Record<string, string> = {
-    first_seen: "bg-zinc-400",
-    first_failure: "bg-red-500",
-    became_flaky: "bg-orange-500",
-    signature: "bg-amber-500",
-  };
-  if (events.length === 0) {
-    return <p className="text-sm text-zinc-500">No timeline events yet.</p>;
-  }
-  return (
-    <ol className="space-y-2">
-      {events.map((e, i) => (
-        <li key={i} className="flex items-start gap-3 text-sm">
-          <span
-            className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot[e.type] ?? "bg-zinc-400"}`}
-          />
-          <span className="text-zinc-700">{e.message}</span>
-          <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-zinc-400">
-            {relativeTime(e.at)}
-          </span>
-        </li>
-      ))}
-    </ol>
-  );
+  const dot: Record<string, string> = { first_seen: "bg-[var(--info)]", first_failure: "bg-[var(--danger)]", became_flaky: "bg-[var(--primary)]", signature: "bg-[var(--warning)]" };
+  return events.length === 0 ? <p className="text-sm text-[var(--muted-foreground)]">No reliability change events recorded yet.</p> : <ol className="relative grid gap-0">{events.map((event, i) => <li key={`${event.type}-${event.at}-${i}`} className="relative flex gap-4 pb-5 last:pb-0"><span className={`relative z-10 mt-1 h-2 w-2 shrink-0 rounded-full ring-4 ring-[var(--card)] ${dot[event.type] ?? "bg-[var(--muted-foreground)]"}`} /><span className={`absolute left-[3px] top-3 h-full w-px ${i === events.length - 1 ? "hidden" : "bg-[var(--border)]"}`} /><div className="min-w-0 flex-1"><p className="text-sm text-[var(--foreground)]">{event.message}{event.pr && <> · <a href={`https://github.com/${event.pr.number}`} className="text-[var(--info)]">PR #{event.pr.number}</a></>}</p><p className="technical mt-1 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{event.type.replaceAll("_", " ")} · {relativeTime(event.at)}</p></div></li>)}</ol>;
 }
 
-export default async function TestPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
+function FailureEvidence({ signatures, score }: Pick<TestHistory, "signatures" | "score">) {
+  if (signatures.length === 0) return <div className="panel p-5"><p className="text-sm text-[var(--muted-foreground)]">No failure evidence recorded. This test has not produced a failure signature.</p></div>;
+  const total = signatures.reduce((sum, item) => sum + item.times_seen_on_test, 0);
+  return <div className="grid gap-3">{signatures.map((signature) => <details key={signature.id} className="panel group"><summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-4 py-4"><span className="technical text-sm font-semibold text-[var(--danger)]">{signature.error_class}</span><span className="min-w-0 flex-1 truncate text-sm text-[var(--foreground)]">{signature.sample_message}</span><span className="technical text-xs text-[var(--muted-foreground)]">{signature.times_seen_on_test}/{total} failures</span><span className="text-xs text-[var(--muted-foreground)] group-open:rotate-90">›</span></summary><div className="grid gap-4 border-t border-[var(--border)] px-4 py-4 md:grid-cols-2"><div><p className="eyebrow">Normalized error</p><p className="mt-2 font-mono text-xs leading-5 text-[var(--foreground)]">{signature.sample_message}</p></div><div><p className="eyebrow">Observed</p><p className="mt-2 text-sm text-[var(--muted-foreground)]">{signature.times_seen_on_test} occurrences on this test{score ? ` · ${pct(signature.times_seen_on_test / Math.max(1, score.failure_count))} of analyzed failures` : ""}.</p><p className="mt-2 text-xs text-[var(--warning)]">Stack trace is not collected by the current JUnit ingestion format.</p></div></div></details>)}</div>;
+}
 
+export default async function TestPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   let history: TestHistory;
   let latest: LatestInvestigation["investigation"] = null;
   try {
     history = await api<TestHistory>(`/api/tests/${id}/history`);
-    // Additive: a missing/failed investigation must not break the page.
-    latest = (
-      await api<LatestInvestigation>(`/api/tests/${id}/investigation`).catch(
-        () => null,
-      )
-    )?.investigation ?? null;
+    latest = (await api<LatestInvestigation>(`/api/tests/${id}/investigation`).catch(() => null))?.investigation ?? null;
   } catch {
-    return (
-      <main className="mx-auto max-w-4xl px-6 py-10">
-        <p className="text-sm text-red-600">Could not load test {id}.</p>
-        <Link href="/" className="mt-4 inline-block text-sm underline">
-          ← back
-        </Link>
-      </main>
-    );
+    return <AppShell active="tests"><main className="mx-auto max-w-5xl px-5 py-12"><div className="panel p-6"><p className="font-semibold text-[var(--danger)]">Unable to load this investigation.</p><Link href="/" className="mt-4 inline-block text-sm text-[var(--info)]">Return to overview</Link></div></main></AppShell>;
   }
 
-  const { test, score, transitions, timeline, prsBySha, outcomes, signatures } = history;
-  const newestFirst = [...outcomes];
+  const { test, score, transitions, mute, timeline, prsBySha, outcomes, signatures } = history;
   const oldestFirst = [...outcomes].reverse();
-  const isBroken = score?.category === "broken";
-  const conf = confidence(score?.window_size);
-  const topSignature = signatures[0];
-  const recs = recommendations(score?.category, topSignature?.error_class);
-
-  // Phase G — correlate failed runs' commits with cached PRs. Wording is
-  // strictly "observed after", never "caused by".
+  const firstFailure = timeline.find((event) => event.type === "first_failure");
   const correlated = Object.entries(prsBySha ?? {}).map(([sha, pr]) => ({ sha, ...pr }));
-  const firstFailureEvent = timeline.find((e) => e.type === "first_failure");
+  const topSignature = signatures[0];
+  const reliabilityTone = score?.category === "stable" ? "text-[var(--success)]" : score?.category === "watch" ? "text-[var(--warning)]" : "text-[var(--danger)]";
 
-  return (
-    <main className="min-h-screen bg-zinc-50">
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <Link
-          href={`/repos/${test.repository_id}`}
-          className="text-sm text-zinc-500 hover:text-zinc-800"
-        >
-          ← {test.repository_full_name}
-        </Link>
+  return <AppShell active="tests"><main className="mx-auto max-w-[1200px] px-4 pb-16 pt-7 sm:px-6 lg:px-10">
+    <Link href={`/repos/${test.repository_id}`} className="technical text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] hover:text-[var(--foreground)]">← {test.repository_full_name}</Link>
+    <header className="mt-5 flex flex-wrap items-start justify-between gap-5 border-b border-[var(--border)] pb-6">
+      <div className="min-w-0"><p className="eyebrow text-[var(--primary)]">Test investigation</p><div className="mt-2 flex flex-wrap items-center gap-2"><h1 className="break-words text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">{test.name || "Unnamed test"}</h1><CategoryBadge category={score?.category ?? null} /></div><p className="technical mt-2 break-all text-xs text-[var(--muted-foreground)]">{test.file_path}{test.suite_path ? ` / ${test.suite_path}` : ""}</p></div>
+      <div className="flex items-center gap-2">{!mute && <MuteButton testId={Number(id)} initial={null} />}{mute && <span className="technical rounded-sm border border-[var(--warning)] px-2 py-1 text-[10px] uppercase text-[var(--warning)]">{mute.kind}</span>}</div>
+    </header>
 
-        <header className="mb-6 mt-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight">
-              {test.name || "(unnamed)"}
-            </h1>
-            <CategoryBadge category={score?.category ?? null} />
-          </div>
-          <p className="mt-1 font-mono text-xs text-zinc-500">{test.file_path}</p>
-          <p className="mt-1 text-xs text-zinc-400">
-            first seen {relativeTime(test.first_seen_at)} · last seen{" "}
-            {relativeTime(test.last_seen_at)}
-          </p>
-        </header>
+    <section className="grid gap-3 py-6 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="panel-strong p-4"><p className="eyebrow">Deterministic signal</p><p className={`technical mt-2 text-4xl font-bold ${reliabilityTone}`}>{score?.score ?? "–"}<span className="ml-1 text-sm font-normal text-[var(--muted-foreground)]">/100</span></p><p className="mt-2 text-[11px] text-[var(--muted-foreground)]">This verdict comes from recorded outcomes, not AI.</p></div>
+      <div className="panel p-4"><SignalMetric label="Failure rate" value={pct(score?.failure_rate)} detail={score ? `${score.failure_count}/${score.window_size} runs` : undefined} tone={reliabilityTone} /></div>
+      <div className="panel p-4"><SignalMetric label="Transitions" value={`${transitions.passToFail} P→F`} detail={`${transitions.failToPass} F→P recoveries`} /></div>
+      <div className="panel p-4"><SignalMetric label="Confidence" value={confidence(score?.window_size)} detail={score?.wilson_lower == null ? "Wilson bound unavailable" : `Wilson lower ${pct(score.wilson_lower, 1)}`} /></div>
+      <div className="panel p-4"><SignalMetric label="Observed" value={relativeTime(test.last_seen_at)} detail={`first seen ${relativeTime(test.first_seen_at)}`} /></div>
+    </section>
 
-        {isBroken && (
-          <div className="mb-6 rounded-lg border border-fuchsia-200 bg-fuchsia-50 p-4 text-sm text-fuchsia-800">
-            <b>Consistent failure.</b> This test has failed its last runs in a
-            row — this is breakage, not flakiness.
-          </div>
-        )}
+    {mute && <div className="mb-6 flex flex-wrap items-center gap-3 border border-[var(--warning)] bg-[color-mix(in_oklab,var(--warning)_8%,transparent)] px-4 py-3 text-sm text-[var(--warning)]"><span className="font-semibold capitalize">{mute.kind}</span>{mute.reason && <span>“{mute.reason}”</span>}<span className="ml-auto"><MuteButton testId={Number(id)} initial={mute} /></span></div>}
 
-        {/* Flake score — explainable */}
-        <section className="mb-6 rounded-lg border border-zinc-200 bg-white p-5">
-          <div className="flex flex-wrap items-center gap-4">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-zinc-500">
-                Flake score
-              </div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-4xl font-semibold tabular-nums">
-                  {score?.score ?? "–"}
-                </span>
-                <span className="text-sm text-zinc-400">/ 100</span>
-              </div>
-            </div>
-            <div className="ml-auto text-right">
-              <div className="text-xs text-zinc-500">Confidence</div>
-              <div className="text-sm font-medium">{conf}</div>
-              {score?.wilson_lower !== null &&
-                score?.wilson_lower !== undefined && (
-                  <div className="text-[11px] text-zinc-400">
-                    Wilson lower bound {pct(score.wilson_lower, 1)}
-                  </div>
-                )}
-            </div>
-          </div>
+    <div className="grid gap-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+      <div className="grid gap-8">
+        <section><div className="mb-3 flex items-end justify-between gap-3"><div><p className="eyebrow">Why</p><h2 className="mt-1 text-xl font-semibold">Why is this test failing?</h2></div><span className="technical text-[10px] text-[var(--muted-foreground)]">failure evidence</span></div>{signatures.length > 0 && <p className="mb-3 text-sm leading-6 text-[var(--muted-foreground)]"><span className="text-[var(--foreground)]">{signatures[0]!.times_seen_on_test} of {signatures.reduce((sum, item) => sum + item.times_seen_on_test, 0)} recorded failures</span> share the dominant signature. Expand a signature to inspect its normalized error.</p>}<FailureEvidence signatures={signatures} score={score} /></section>
 
-          <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-zinc-100 pt-4 sm:grid-cols-4">
-            <div>
-              <dt className="text-xs text-zinc-500">Failure rate</dt>
-              <dd className="mt-0.5 text-lg font-medium tabular-nums">
-                {pct(score?.failure_rate)}
-                {score ? (
-                  <span className="ml-1 text-xs font-normal text-zinc-400">
-                    ({score.failure_count}/{score.window_size})
-                  </span>
-                ) : null}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Pass → Fail transitions</dt>
-              <dd className="mt-0.5 text-lg font-medium tabular-nums">
-                {transitions.passToFail}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Fail → Pass transitions</dt>
-              <dd className="mt-0.5 text-lg font-medium tabular-nums">
-                {transitions.failToPass}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Analyzed runs</dt>
-              <dd className="mt-0.5 text-lg font-medium tabular-nums">
-                {score?.window_size ?? 0}
-              </dd>
-            </div>
-          </dl>
-        </section>
+        <section id="what-changed"><div className="mb-3"><p className="eyebrow">What changed</p><h2 className="mt-1 text-xl font-semibold">When did reliability move?</h2></div><div className="panel p-5"><Timeline events={timeline} /></div>{firstFailure?.pr && <p className="mt-3 text-xs text-[var(--muted-foreground)]">Reliability degradation was first observed after <b className="text-[var(--foreground)]">PR #{firstFailure.pr.number}</b>. This is timing correlation, not proof of causation.</p>}{correlated.length > 0 && <div className="mt-3 grid gap-2">{correlated.map((item) => <div key={item.sha} className="panel flex flex-wrap items-center gap-2 px-4 py-3 text-xs"><span className="technical text-[var(--muted-foreground)]">{item.sha.slice(0, 7)}</span><a className="text-[var(--info)] hover:underline" href={`https://github.com/${test.repository_full_name}/pull/${item.prNumber}`} target="_blank" rel="noreferrer">View PR #{item.prNumber} ↗</a>{item.title && <span className="text-[var(--muted-foreground)]">{item.title}</span>}</div>)}</div>}</section>
 
-        {/* AI FAILURE INVESTIGATION */}
-        <AiPanel testId={Number(id)} initial={latest} />
-
-        {/* WHY */}
-        <section className="mb-6">
-          <h2 className="mb-3 text-sm font-semibold text-zinc-700">
-            Why is it failing?
-          </h2>
-          {signatures.length === 0 ? (
-            <div className="rounded-lg border border-zinc-200 bg-white px-4 py-4 text-sm text-zinc-500">
-              No failure signatures — this test hasn&apos;t failed.
-            </div>
-          ) : (
-            <>
-              {(() => {
-                const total = signatures.reduce((a, s) => a + s.times_seen_on_test, 0);
-                const dominant = Math.max(...signatures.map((s) => s.times_seen_on_test));
-                return total > 1 ? (
-                  <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    <b>{dominant}</b> of <b>{total}</b> recorded failures share the
-                    same failure signature ({pct(dominant / total)}).
-                  </p>
-                ) : null;
-              })()}
-              <ul className="space-y-2">
-              {signatures.map((s) => (
-                <li
-                  key={s.id}
-                  className="rounded-lg border border-zinc-200 bg-white px-4 py-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-zinc-700">
-                      {s.error_class}
-                    </span>
-                    <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-600 ring-1 ring-inset ring-red-100">
-                      {s.times_seen_on_test} failure{s.times_seen_on_test === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  <p className="mt-1 break-words font-mono text-xs text-zinc-500">
-                    {s.sample_message}
-                  </p>
-                </li>
-              ))}
-              </ul>
-            </>
-          )}
-        </section>
-
-        {/* WHAT CHANGED */}
-        <section className="mb-6">
-          <h2 className="mb-3 text-sm font-semibold text-zinc-700">
-            When did it become unreliable?
-          </h2>
-
-          {/* PR correlation — timing evidence only */}
-          {firstFailureEvent && (
-            <div className="mb-3 rounded-lg border border-zinc-200 bg-white px-4 py-3 text-sm">
-              {firstFailureEvent.pr ? (
-                <>
-                  <span className="text-zinc-700">
-                    Reliability degradation was first observed after{" "}
-                    <b>PR #{firstFailureEvent.pr.number}</b>
-                    {firstFailureEvent.pr.title
-                      ? ` — ${firstFailureEvent.pr.title}`
-                      : ""}
-                    .
-                  </span>
-                  <span className="ml-1 text-xs text-zinc-400">
-                    (timing correlation, not causation)
-                  </span>
-                </>
-              ) : (
-                <span className="text-zinc-700">{firstFailureEvent.message}</span>
-              )}
-            </div>
-          )}
-
-          {correlated.length > 0 && (
-            <div className="mb-3 rounded-lg border border-zinc-200 bg-white px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
-                Correlated pull requests
-              </p>
-              <ul className="mt-2 space-y-2">
-                {correlated.map((c) => (
-                  <li key={c.sha} className="text-sm">
-                    <div className="flex flex-wrap items-center gap-x-2">
-                      <span className="font-mono text-xs text-zinc-400">
-                        {c.sha.slice(0, 7)}
-                      </span>
-                      <a
-                        href={`https://github.com/${test.repository_full_name}/pull/${c.prNumber}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-medium text-indigo-700 hover:underline"
-                      >
-                        PR #{c.prNumber}
-                      </a>
-                      {c.title && (
-                        <span className="truncate text-zinc-600">{c.title}</span>
-                      )}
-                      {c.authorLogin && (
-                        <span className="text-xs text-zinc-400">@{c.authorLogin}</span>
-                      )}
-                    </div>
-                    {c.changedFiles && c.changedFiles.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {c.changedFiles.slice(0, 8).map((f) => (
-                          <span
-                            key={f}
-                            className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] text-zinc-600"
-                          >
-                            {f}
-                          </span>
-                        ))}
-                        {c.changedFiles.length > 8 && (
-                          <span className="text-[10px] text-zinc-400">
-                            +{c.changedFiles.length - 8} more
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div className="rounded-lg border border-zinc-200 bg-white px-4 py-4">
-            <Timeline events={timeline} />
-          </div>
-
-          {outcomes.length > 0 && (
-            <div id="outcomes">
-              <div className="mb-3 rounded-lg border border-zinc-200 bg-white p-3">
-                <Ribbon outcomes={oldestFirst.map((o) => o.status)} size="lg" />
-              </div>
-              <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
-                <table className="w-full min-w-[640px] text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-zinc-200 text-zinc-500">
-                      <th className="px-3 py-2 font-medium">Run</th>
-                      <th className="px-3 py-2 font-medium">Status</th>
-                      <th className="px-3 py-2 font-medium">When</th>
-                      <th className="px-3 py-2 font-medium">Branch</th>
-                      <th className="px-3 py-2 font-medium">Commit</th>
-                      <th className="px-3 py-2 font-medium">Failure</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {newestFirst.map((o, i) => (
-                      <tr key={i} className="border-b border-zinc-100 last:border-0">
-                        <td className="whitespace-nowrap px-3 py-2 font-mono text-zinc-500">
-                          #{o.github_run_id}
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`mr-1 inline-block h-2 w-2 rounded-full align-middle ${
-                              o.status === "failed"
-                                ? "bg-red-500"
-                                : o.status === "skipped"
-                                  ? "bg-zinc-300"
-                                  : "bg-emerald-500"
-                            }`}
-                          />
-                          <span className="font-medium">{o.status}</span>
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2 text-zinc-600">
-                          {new Date(o.executed_at).toLocaleString()}
-                        </td>
-                        <td className="px-3 py-2 text-zinc-500">
-                          {o.head_branch ?? "–"}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-zinc-400">
-                          {o.head_sha ? o.head_sha.slice(0, 7) : "–"}
-                        </td>
-                        <td
-                          className="max-w-[240px] truncate px-3 py-2 text-red-600"
-                          title={`${o.error_class ?? ""}: ${o.sample_message ?? ""}`}
-                        >
-                          {o.error_class
-                            ? `${o.error_class}: ${o.sample_message}`
-                            : ""}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                 </table>
-               </div>
-             </div>
-           )}
-         </section>
-
-        {/* WHAT TO DO */}
-        <section>
-          <h2 className="mb-3 text-sm font-semibold text-zinc-700">
-            What should you do?
-          </h2>
-          <ul className="space-y-2">
-            {recs.map((r, i) => (
-              <li
-                key={i}
-                className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700"
-              >
-                <span className="mt-0.5 font-semibold text-zinc-400">
-                  {i + 1}.
-                </span>
-                {r}
-              </li>
-            ))}
-          </ul>
-        </section>
+        <section id="outcomes"><div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><p className="eyebrow">Failure history</p><h2 className="mt-1 text-xl font-semibold">Last {outcomes.length} runs</h2></div><span className="technical text-[10px] text-[var(--muted-foreground)]">oldest → newest</span></div><div className="panel mb-3 p-4"><Ribbon outcomes={oldestFirst.map((item) => item.status)} size="lg" /></div><div className="grid gap-2 md:hidden">{outcomes.map((outcome, i) => <div key={i} className="panel grid grid-cols-[auto_1fr_auto] items-center gap-3 px-4 py-3"><span className={`h-2 w-2 rounded-full ${outcome.status === "failed" ? "bg-[var(--danger)]" : outcome.status === "skipped" ? "bg-[var(--muted-foreground)]" : "bg-[var(--success)]"}`} /><div><p className="technical text-xs text-[var(--foreground)]">run #{outcome.github_run_id}</p><p className="text-[10px] text-[var(--muted-foreground)]">{relativeTime(outcome.executed_at)} · {outcome.head_branch ?? "unknown branch"}</p></div><span className="technical text-[10px] uppercase text-[var(--muted-foreground)]">{outcome.status}</span></div>)}</div><div className="panel hidden overflow-x-auto md:block"><table className="w-full min-w-[680px] text-left text-xs"><thead className="border-b border-[var(--border)] text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]"><tr><th className="px-4 py-3 font-medium">Run</th><th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">When</th><th className="px-4 py-3 font-medium">Commit</th><th className="px-4 py-3 font-medium">Failure</th></tr></thead><tbody>{outcomes.map((outcome, i) => <tr key={i} className="border-b border-[var(--border)] last:border-0"><td className="technical px-4 py-3 text-[var(--foreground)]">#{outcome.github_run_id}</td><td className="px-4 py-3"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full ${outcome.status === "failed" ? "bg-[var(--danger)]" : outcome.status === "skipped" ? "bg-[var(--muted-foreground)]" : "bg-[var(--success)]"}`} />{outcome.status}</td><td className="px-4 py-3 text-[var(--muted-foreground)]">{new Date(outcome.executed_at).toLocaleString()}</td><td className="technical px-4 py-3 text-[var(--muted-foreground)]">{outcome.head_sha ? outcome.head_sha.slice(0, 7) : "—"}</td><td className="max-w-[280px] truncate px-4 py-3 text-[var(--danger)]" title={`${outcome.error_class ?? ""}: ${outcome.sample_message ?? ""}`}>{outcome.error_class ? `${outcome.error_class}: ${outcome.sample_message}` : "—"}</td></tr>)}</tbody></table></div></section>
       </div>
-    </main>
-  );
+
+      <aside className="grid content-start gap-5"><AiPanel testId={Number(id)} initial={latest} /><section><p className="eyebrow">Next move</p><h2 className="mt-1 text-xl font-semibold">What should you do?</h2><ul className="mt-3 grid gap-2">{recommendations(score?.category, topSignature?.error_class).map((item, i) => <li key={i} className="panel flex gap-3 px-4 py-3 text-sm leading-5 text-[var(--muted-foreground)]"><span className="technical text-[var(--primary)]">{i + 1}.</span>{item}</li>)}</ul></section><div className="panel p-4"><p className="eyebrow">Evidence boundary</p><p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">FlakyGuard has no runner/OS or full stack trace for this record. Those fields are intentionally not inferred.</p></div></aside>
+    </div>
+  </main></AppShell>;
 }

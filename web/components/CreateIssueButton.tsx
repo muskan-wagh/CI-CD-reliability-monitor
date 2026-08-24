@@ -46,12 +46,12 @@ export default function CreateIssueButton({ testId }: { testId: number }) {
         href={state.url}
         target="_blank"
         rel="noreferrer"
-        className="shrink-0 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
+        className="shrink-0 rounded-sm border border-[color-mix(in_oklab,var(--success)_34%,var(--border))] bg-[color-mix(in_oklab,var(--success)_10%,transparent)] px-2.5 py-2 text-xs font-medium text-[var(--success)] hover:bg-[color-mix(in_oklab,var(--success)_18%,transparent)]"
       >
         Issue #{state.number} ↗
       </a>
     ) : (
-      <span className="shrink-0 text-xs font-medium text-emerald-700">
+      <span className="shrink-0 text-xs font-medium text-[var(--success)]">
         Issue #{state.number} created
       </span>
     );
@@ -62,14 +62,14 @@ export default function CreateIssueButton({ testId }: { testId: number }) {
       <button
         onClick={create}
         disabled={state.kind === "loading"}
-        className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+        className="rounded-sm border border-[var(--border)] px-2.5 py-2 text-xs font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
         title="Create a GitHub issue with the evidence pack"
       >
         {state.kind === "loading" ? "Creating…" : "Create issue"}
       </button>
       {state.kind === "error" && (
         <span
-          className="ml-2 max-w-[220px] truncate align-middle text-[10px] text-red-600"
+          className="ml-2 max-w-[220px] truncate align-middle text-[10px] text-[var(--danger)]"
           title={state.message}
         >
           {state.message}

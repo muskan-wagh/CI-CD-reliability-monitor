@@ -1,17 +1,17 @@
 export function categoryStyles(category: string): string {
   switch (category) {
     case "critical":
-      return "bg-red-100 text-red-700 ring-red-200";
+      return "status-critical";
     case "flaky":
-      return "bg-orange-100 text-orange-700 ring-orange-200";
+      return "status-flaky";
     case "watch":
-      return "bg-amber-100 text-amber-700 ring-amber-200";
+      return "status-watch";
     case "broken":
-      return "bg-fuchsia-100 text-fuchsia-700 ring-fuchsia-200";
+      return "status-broken";
     case "stable":
-      return "bg-emerald-100 text-emerald-700 ring-emerald-200";
+      return "status-stable";
     default:
-      return "bg-zinc-100 text-zinc-600 ring-zinc-200";
+      return "status-insufficient";
   }
 }
 
@@ -21,13 +21,22 @@ export const CATEGORY_LABEL: Record<string, string> = {
   watch: "Watch",
   broken: "Broken",
   stable: "Stable",
-  insufficient: "No data",
+  insufficient: "Insufficient",
+};
+
+export const CATEGORY_ICON: Record<string, string> = {
+  critical: "!",
+  flaky: "~",
+  watch: "◌",
+  broken: "×",
+  stable: "✓",
+  insufficient: "?",
 };
 
 export function outcomeColor(status: string): string {
-  if (status === "failed") return "bg-red-500";
-  if (status === "skipped") return "bg-zinc-300";
-  return "bg-emerald-500";
+  if (status === "failed") return "outcome-fail";
+  if (status === "skipped") return "outcome-skip";
+  return "outcome-pass";
 }
 
 export function relativeTime(iso: string | null): string {
@@ -86,15 +95,15 @@ export function healthTone(status: string): { dot: string; text: string } {
     case "receiving":
     case "working":
     case "ok":
-      return { dot: "bg-emerald-500", text: "text-emerald-700" };
+      return { dot: "bg-[var(--success)]", text: "text-[var(--success)]" };
     case "degraded":
     case "idle":
     case "not_configured":
-      return { dot: "bg-amber-500", text: "text-amber-700" };
+      return { dot: "bg-[var(--warning)]", text: "text-[var(--warning)]" };
     case "down":
     case "not_installed":
-      return { dot: "bg-red-500", text: "text-red-700" };
+      return { dot: "bg-[var(--danger)]", text: "text-[var(--danger)]" };
     default:
-      return { dot: "bg-zinc-300", text: "text-zinc-500" };
+      return { dot: "bg-[var(--muted-foreground)]", text: "text-[var(--muted-foreground)]" };
   }
 }

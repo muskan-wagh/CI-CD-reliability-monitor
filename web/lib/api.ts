@@ -18,6 +18,16 @@ export type Category =
   | "critical"
   | "broken";
 
+export type MuteKind = "muted" | "quarantined";
+
+export interface MuteInfo {
+  kind: MuteKind;
+  reason: string | null;
+  createdBy?: string | null;
+  createdAt?: string;
+  expiresAt?: string | null;
+}
+
 export interface LeaderboardTest {
   id: number;
   file_path: string;
@@ -36,6 +46,9 @@ export interface LeaderboardTest {
   top_error_class: string | null;
   top_sample_message: string | null;
   last_failed_at: string | null;
+  mute?: { kind: MuteKind; reason: string | null } | null;
+  /** CODEOWNERS-derived; null when the repo has no CODEOWNERS. */
+  owners?: string[] | null;
 }
 
 export interface RepoDetail {
@@ -106,6 +119,7 @@ export interface TestHistory {
     computed_at: string;
   } | null;
   transitions: { passToFail: number; failToPass: number };
+  mute?: MuteInfo | null;
   timeline: TimelineEvent[];
   /** head_sha → PR, when GitHub data allowed a correlation. */
   prsBySha?: Record<string, CorrelatedPr>;
@@ -145,6 +159,32 @@ export interface FlakyTestRow {
   top_error_class: string | null;
   top_sample_message: string | null;
   signature_count: number | null;
+  /** CODEOWNERS-derived; null when the repo has no CODEOWNERS. */
+  owners?: string[] | null;
+  first_unreliable_at?: string | null;
+  first_failure_at?: string | null;
+  first_failure_sha?: string | null;
+  first_failure_pr_number?: number | null;
+  first_failure_pr_title?: string | null;
+  first_failure_changed_files?: string[] | null;
+  ai_result?: AiInvestigation | null;
+  ai_provider?: string | null;
+  ai_model?: string | null;
+  ai_classification?: string | null;
+  ai_confidence?: number | null;
+}
+
+export interface MutedTestRow {
+  id: number;
+  name: string;
+  file_path: string;
+  repository: string;
+  score: number | null;
+  category: Category | null;
+  mute_kind: MuteKind;
+  mute_reason: string | null;
+  mute_created_by: string | null;
+  mute_expires_at: string | null;
 }
 
 export interface RecentRun {
@@ -189,15 +229,26 @@ export interface TrendItem {
 }
 
 export interface CiWaste {
-  failed_duration_ms: number;
-  failed_results: number;
-  flaky_duration_ms: number;
+  windowDays: number;
+  failedDurationMs: number;
+  failedResults: number;
+  flakyDurationMs: number;
+  totalDurationMs: number;
+  totalResults: number;
+  /** Failed results followed immediately by a pass — flake signature. */
+  recoveredFailures: number;
+  /** Distinct runs containing a failing result on a problematic test. */
+  affectedRuns: number;
+  /** Wall-clock duration of those runs. */
+  affectedWallMs: number;
 }
 
 export interface Dashboard {
   stats: DashboardStats;
   reliability: Reliability;
   mostFlakyTests: FlakyTestRow[];
+  mutedTests: MutedTestRow[];
+  ownershipSummary?: { owner: string; count: number }[];
   newlyFlaky: TrendItem[];
   trendingWorse: TrendItem[];
   trendingBetter: TrendItem[];
@@ -234,11 +285,6 @@ export interface LatestInvestigation {
         created_at: string;
       }
     | null;
-}
-
-export interface HealthCheck {
-  status: string;
-  [key: string]: unknown;
 }
 
 export interface Health {
@@ -287,10 +333,10 @@ interface ForwardedResponse<T> {
   body: T | null;
 }
 
-/** POST/GET passthrough for Next route handlers (session-aware, error-mapped). */
+/** POST/GET/DELETE passthrough for Next route handlers (session-aware, error-mapped). */
 export async function apiForward<T>(
   path: string,
-  method: "GET" | "POST" = "GET",
+  method: "GET" | "POST" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<ForwardedResponse<T>> {
   const headers = {
