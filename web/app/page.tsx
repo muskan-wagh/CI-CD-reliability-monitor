@@ -12,6 +12,7 @@ import {
   type TrendItem,
 } from "@/lib/api";
 import { CategoryBadge, ConclusionBadge, Ribbon } from "@/lib/components";
+import CreateIssueButton from "@/components/CreateIssueButton";
 import {
   formatDuration,
   formatMs,
@@ -166,6 +167,7 @@ function ActionCenter({ tests }: { tests: FlakyTestRow[] }) {
               >
                 Investigate
               </Link>
+              <CreateIssueButton testId={t.id} />
             </li>
           ))}
         </ul>

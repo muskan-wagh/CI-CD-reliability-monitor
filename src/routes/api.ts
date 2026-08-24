@@ -5,6 +5,11 @@ import { verifySessionToken } from "../lib/session.js";
 import { buildFailureEvidence } from "../lib/evidence.js";
 import { investigateTest } from "../lib/aiInvestigation.js";
 import { AiNotConfiguredError } from "../lib/ai/index.js";
+import { getPrsByShas } from "../lib/prCorrelation.js";
+import { loadGithubAppCredentials, createInstallationClient } from "../lib/githubApp.js";
+import { issueTitle, renderIssueBody } from "../lib/issueTemplate.js";
+import type { AiInvestigation } from "../lib/ai/types.js";
+import type { CorrelatedPr } from "../lib/prCorrelation.js";
 
 export interface ApiOptions {
   pool: Pool;
@@ -306,22 +311,42 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
     // Reliability timeline: the key moments in this test's life, oldest first.
     // Everything here is a recorded fact (first seen, first failure, crossing
     // events, signature appearances) — never an attribution of cause.
-    const events: { type: string; at: string; message: string }[] = [];
+    const events: {
+      type: string;
+      at: string;
+      message: string;
+      pr?: { number: number; title: string | null } | null;
+    }[] = [];
     if (test.rows[0].first_seen_at) {
       events.push({
         type: "first_seen",
         at: test.rows[0].first_seen_at,
         message: "Test first recorded",
+        pr: null,
       });
     }
+
+    // Phase G: correlate recorded SHAs with cached pull requests (pure DB read
+    // — resolution happens at webhook time; nothing here calls GitHub).
+    const shas = [
+      ...new Set(outcomes.rows.map((r) => r.head_sha).filter((s): s is string => Boolean(s))),
+    ];
+    const prsBySha = await getPrsByShas(
+      pool,
+      Number(test.rows[0].repository_id),
+      shas,
+    );
+
     if (firstFailure.rows[0]?.executed_at) {
       const sha = firstFailure.rows[0].head_sha
-        ? ` (commit ${String(firstFailure.rows[0].head_sha).slice(0, 7)})`
-        : "";
+        ? String(firstFailure.rows[0].head_sha)
+        : null;
+      const pr = sha ? prsBySha[sha] ?? null : null;
       events.push({
         type: "first_failure",
         at: firstFailure.rows[0].executed_at,
-        message: `First failure${sha}`,
+        message: `First failure${sha ? ` (commit ${sha.slice(0, 7)})` : ""}`,
+        pr: pr ? { number: pr.prNumber, title: pr.title } : null,
       });
     }
     for (const e of flakyEvents.rows) {
@@ -333,6 +358,7 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
           type: "signature",
           at: s.first_seen_on_test,
           message: `New failure signature: ${s.error_class}`,
+          pr: null,
         });
       }
     }
@@ -352,6 +378,7 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
       score: score.rows[0] ?? null,
       transitions: { passToFail, failToPass },
       timeline: events,
+      prsBySha,
       outcomes: outcomes.rows,
       signatures: signatures.rows,
     };
@@ -436,6 +463,115 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
       request.log.error({ err }, "AI investigation failed");
       return reply.code(502).send({
         error: "ai_provider_failed",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── Create a GitHub issue for a flaky test (Phase H). Uses the App's
+  //    installation token server-side; the issue body is rendered from
+  //    recorded evidence and redacted — no secrets, no causal claims. ─────
+  app.post("/api/tests/:id/issue", { preHandler: authPreHandler }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const testId = Number(params.id);
+    if (!Number.isInteger(testId)) {
+      return reply.code(400).send({ error: "invalid_test_id" });
+    }
+
+    const meta = await pool.query(
+      `SELECT t.repository_id, r.installation_id, r.full_name
+       FROM tests t JOIN repositories r ON r.id = t.repository_id
+       WHERE t.id = $1`,
+      [testId],
+    );
+    if (meta.rows.length === 0) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    const row = meta.rows[0];
+    const installationId =
+      row.installation_id === null ? null : Number(row.installation_id);
+    if (
+      !assertInstallationAccess(request, reply, installationId)
+    ) {
+      return;
+    }
+
+    let credentials;
+    try {
+      credentials = loadGithubAppCredentials();
+    } catch (err) {
+      return reply.code(503).send({
+        error: "github_app_not_configured",
+        detail:
+          err instanceof Error
+            ? err.message
+            : "GitHub App credentials are invalid or unreadable.",
+      });
+    }
+    if (!credentials || installationId === null) {
+      return reply.code(503).send({
+        error: "github_app_not_configured",
+        detail:
+          "Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY(_PATH) to create issues via the GitHub App.",
+      });
+    }
+
+    try {
+      const evidence = await buildFailureEvidence(pool, testId);
+      if (!evidence) {
+        return reply.code(404).send({ error: "not_found" });
+      }
+
+      // Latest cached AI investigation, if any.
+      const aiRows = await pool.query(
+        `SELECT result FROM cicd_ai_investigations WHERE test_id = $1
+         ORDER BY created_at DESC LIMIT 1`,
+        [testId],
+      );
+      const ai =
+        aiRows.rows[0]
+          ? ((typeof aiRows.rows[0].result === "string"
+              ? JSON.parse(aiRows.rows[0].result)
+              : aiRows.rows[0].result) as AiInvestigation | null)
+          : null;
+
+      // Correlated PR for the first failing commit.
+      const firstFailed = [...evidence.outcomes].find((o) => o.status === "failed");
+      let pr: CorrelatedPr | null = null;
+      if (firstFailed?.headSha) {
+        const bySha = await getPrsByShas(pool, Number(row.repository_id), [
+          firstFailed.headSha,
+        ]);
+        pr = bySha[firstFailed.headSha] ?? null;
+      }
+
+      const input = {
+        evidence,
+        ai: ai && ai.classification !== "UNKNOWN" ? ai : null,
+        pr,
+        testUrl: process.env.DASHBOARD_URL
+          ? `${process.env.DASHBOARD_URL.replace(/\/+$/, "")}/tests/${testId}`
+          : null,
+      };
+
+      const client = await createInstallationClient(credentials, installationId);
+      const created = await client.post<{ number: number; html_url?: string }>(
+        `/repos/${row.full_name}/issues`,
+        {
+          title: issueTitle(input),
+          body: renderIssueBody(input),
+          labels: ["flakyguard"],
+        },
+      );
+
+      return {
+        number: created.number,
+        url: created.html_url ?? null,
+      };
+    } catch (err) {
+      request.log.error({ err }, "issue creation failed");
+      return reply.code(502).send({
+        error: "issue_creation_failed",
         detail: err instanceof Error ? err.message : String(err),
       });
     }

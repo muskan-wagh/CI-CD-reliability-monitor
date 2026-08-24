@@ -209,37 +209,27 @@ async function resetDemoData(): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Deletion order follows FK dependencies (children before parents).
+    const repoFilter = `repository_id IN (SELECT id FROM repositories WHERE full_name = $1)`;
+    const testFilter = `test_id IN (SELECT id FROM tests WHERE repository_id IN (SELECT id FROM repositories WHERE full_name = $1))`;
+
+    await client.query(`DELETE FROM test_results WHERE ${testFilter}`, [REPO_FULL_NAME]);
+    await client.query(`DELETE FROM flake_scores WHERE ${testFilter}`, [REPO_FULL_NAME]);
     await client.query(
-      `DELETE FROM test_results WHERE test_id IN
-         (SELECT id FROM tests WHERE repository_id IN
-            (SELECT id FROM repositories WHERE full_name = $1))`,
+      `DELETE FROM cicd_ai_investigations WHERE ${testFilter}`,
       [REPO_FULL_NAME],
     );
-    await client.query(
-      `DELETE FROM flake_scores WHERE test_id IN
-         (SELECT id FROM tests WHERE repository_id IN
-            (SELECT id FROM repositories WHERE full_name = $1))`,
-      [REPO_FULL_NAME],
-    );
-    await client.query(
-      `DELETE FROM failure_signatures WHERE repository_id IN
-         (SELECT id FROM repositories WHERE full_name = $1)`,
-      [REPO_FULL_NAME],
-    );
-    await client.query(
-      `DELETE FROM tests WHERE repository_id IN
-         (SELECT id FROM repositories WHERE full_name = $1)`,
-      [REPO_FULL_NAME],
-    );
-    await client.query(
-      `DELETE FROM workflow_runs WHERE repository_id IN
-         (SELECT id FROM repositories WHERE full_name = $1)`,
-      [REPO_FULL_NAME],
-    );
+    await client.query(`DELETE FROM failure_signatures WHERE ${repoFilter}`, [REPO_FULL_NAME]);
+    await client.query(`DELETE FROM tests WHERE ${repoFilter}`, [REPO_FULL_NAME]);
+    await client.query(`DELETE FROM workflow_runs WHERE ${repoFilter}`, [REPO_FULL_NAME]);
+    await client.query(`DELETE FROM pull_requests WHERE ${repoFilter}`, [REPO_FULL_NAME]);
     await client.query(`DELETE FROM repositories WHERE full_name = $1`, [REPO_FULL_NAME]);
     await client.query(`DELETE FROM api_keys WHERE installation_id = $1`, [INSTALLATION_ID]);
     await client.query(`DELETE FROM installations WHERE id = $1`, [INSTALLATION_ID]);
-    await client.query(`DELETE FROM activity_events WHERE repository_full_name = $1`, [REPO_FULL_NAME]);
+    await client.query(
+      `DELETE FROM activity_events WHERE repository_full_name = $1`,
+      [REPO_FULL_NAME],
+    );
     await client.query("COMMIT");
     console.log("[demo] reset previous demo data");
   } catch (err) {

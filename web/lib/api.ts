@@ -70,6 +70,17 @@ export interface TimelineEvent {
   type: "first_seen" | "first_failure" | "became_flaky" | "signature";
   at: string;
   message: string;
+  /** Present on first_failure when a PR was correlated for that commit. */
+  pr?: { number: number; title: string | null } | null;
+}
+
+/** Cached PR correlation for a run's head SHA (Phase G). */
+export interface CorrelatedPr {
+  prNumber: number;
+  title: string | null;
+  authorLogin: string | null;
+  state: string | null;
+  changedFiles: string[] | null;
 }
 
 export interface TestHistory {
@@ -96,6 +107,8 @@ export interface TestHistory {
   } | null;
   transitions: { passToFail: number; failToPass: number };
   timeline: TimelineEvent[];
+  /** head_sha → PR, when GitHub data allowed a correlation. */
+  prsBySha?: Record<string, CorrelatedPr>;
   outcomes: HistoryOutcome[];
   signatures: {
     id: number;

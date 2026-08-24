@@ -112,13 +112,18 @@ export default async function TestPage({
     );
   }
 
-  const { test, score, transitions, timeline, outcomes, signatures } = history;
+  const { test, score, transitions, timeline, prsBySha, outcomes, signatures } = history;
   const newestFirst = [...outcomes];
   const oldestFirst = [...outcomes].reverse();
   const isBroken = score?.category === "broken";
   const conf = confidence(score?.window_size);
   const topSignature = signatures[0];
   const recs = recommendations(score?.category, topSignature?.error_class);
+
+  // Phase G — correlate failed runs' commits with cached PRs. Wording is
+  // strictly "observed after", never "caused by".
+  const correlated = Object.entries(prsBySha ?? {}).map(([sha, pr]) => ({ sha, ...pr }));
+  const firstFailureEvent = timeline.find((e) => e.type === "first_failure");
 
   return (
     <main className="min-h-screen bg-zinc-50">
@@ -263,6 +268,80 @@ export default async function TestPage({
           <h2 className="mb-3 text-sm font-semibold text-zinc-700">
             When did it become unreliable?
           </h2>
+
+          {/* PR correlation — timing evidence only */}
+          {firstFailureEvent && (
+            <div className="mb-3 rounded-lg border border-zinc-200 bg-white px-4 py-3 text-sm">
+              {firstFailureEvent.pr ? (
+                <>
+                  <span className="text-zinc-700">
+                    Reliability degradation was first observed after{" "}
+                    <b>PR #{firstFailureEvent.pr.number}</b>
+                    {firstFailureEvent.pr.title
+                      ? ` — ${firstFailureEvent.pr.title}`
+                      : ""}
+                    .
+                  </span>
+                  <span className="ml-1 text-xs text-zinc-400">
+                    (timing correlation, not causation)
+                  </span>
+                </>
+              ) : (
+                <span className="text-zinc-700">{firstFailureEvent.message}</span>
+              )}
+            </div>
+          )}
+
+          {correlated.length > 0 && (
+            <div className="mb-3 rounded-lg border border-zinc-200 bg-white px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                Correlated pull requests
+              </p>
+              <ul className="mt-2 space-y-2">
+                {correlated.map((c) => (
+                  <li key={c.sha} className="text-sm">
+                    <div className="flex flex-wrap items-center gap-x-2">
+                      <span className="font-mono text-xs text-zinc-400">
+                        {c.sha.slice(0, 7)}
+                      </span>
+                      <a
+                        href={`https://github.com/${test.repository_full_name}/pull/${c.prNumber}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-medium text-indigo-700 hover:underline"
+                      >
+                        PR #{c.prNumber}
+                      </a>
+                      {c.title && (
+                        <span className="truncate text-zinc-600">{c.title}</span>
+                      )}
+                      {c.authorLogin && (
+                        <span className="text-xs text-zinc-400">@{c.authorLogin}</span>
+                      )}
+                    </div>
+                    {c.changedFiles && c.changedFiles.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {c.changedFiles.slice(0, 8).map((f) => (
+                          <span
+                            key={f}
+                            className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] text-zinc-600"
+                          >
+                            {f}
+                          </span>
+                        ))}
+                        {c.changedFiles.length > 8 && (
+                          <span className="text-[10px] text-zinc-400">
+                            +{c.changedFiles.length - 8} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="rounded-lg border border-zinc-200 bg-white px-4 py-4">
             <Timeline events={timeline} />
           </div>

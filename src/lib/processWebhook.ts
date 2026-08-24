@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { Pool } from "pg";
 import { issueApiKey, revokeApiKeys } from "./apiKeys.js";
+import { correlateRun } from "./prCorrelation.js";
 import { upsertRepository, upsertWorkflowRun } from "./store.js";
 
 export interface WebhookEnvelope {
@@ -123,6 +124,20 @@ async function handleWorkflowRun(
   });
 
   console.log(`[RUN] workflow #${run.id} stored (${repo.full_name}, ${run.conclusion ?? "unknown"})`);
+
+  // Phase G: cache which PR (if any) this run's head SHA belongs to. Payload
+  // data first, GitHub API enrichment second — best-effort, never fatal.
+  if (typeof run.head_sha === "string" && run.head_sha) {
+    void correlateRun(db, {
+      repositoryId,
+      fullName: repo.full_name,
+      installationId,
+      headSha: run.head_sha,
+      payload,
+    }).catch((err) =>
+      logger.warn({ err, runId: run.id }, "PR correlation failed"),
+    );
+  }
 
   logger.info(
     { runId: run.id, conclusion: run.conclusion, repo: repo.full_name },
