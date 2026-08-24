@@ -101,6 +101,9 @@ function ReliabilityHero({ reliability }: { reliability: Reliability }) {
           {reliability.score ?? "–"}
         </span>
         <span className="technical mb-1 text-sm text-[var(--muted-foreground)]">/ 100</span>
+        <div className="signal-bars ml-auto flex h-10 items-end gap-1" aria-label="Reliability trend">
+          {[13, 23, 9, 18, 12, 27, 21, 32].map((height, index) => <span key={index} style={{ height: `${height}px` }} />)}
+        </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-3 text-xs">
         <span className="text-[var(--muted-foreground)]">{reliability.analyzed} analyzed tests</span>
@@ -371,10 +374,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const hasData = dashboard !== null && (dashboard.stats.total_tests > 0 || dashboard.recentRuns.length > 0);
 
   return <AppShell active="overview"><main className="mx-auto max-w-[1440px] px-4 pb-16 pt-7 sm:px-6 lg:px-10">
-    <header className="mb-7 flex flex-wrap items-end justify-between gap-5">
-      <div><p className="eyebrow text-[var(--primary)]">Overview / action center</p><h1 className="mt-2 max-w-[18ch] text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)] sm:text-4xl">Fix the test, not the build.</h1><p className="mt-3 max-w-[55ch] text-sm leading-6 text-[var(--muted-foreground)]">Find the unreliable test, understand the evidence, and take the next action without hunting through CI logs.</p></div>
-      {dashboard && <div className="text-right"><p className="eyebrow">Open signals</p><p className="technical mt-1 text-2xl font-bold text-[var(--danger)]">{dashboard.stats.flaky_tests + dashboard.stats.critical_tests + dashboard.stats.broken_tests}</p></div>}
-    </header>
+     <header className="mb-7 flex flex-wrap items-end justify-between gap-5">
+       <div><p className="eyebrow">Overview</p><h1 className="mt-2 max-w-[18ch] text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)] sm:text-4xl">Fix the test, not the build.</h1><p className="mt-3 max-w-[55ch] text-sm leading-6 text-[var(--muted-foreground)]">Find the unreliable test, understand the evidence, and take the next action without hunting through CI logs.</p></div>
+       {dashboard && <div className="panel open-signals w-full px-5 py-4 sm:w-[286px]"><div className="flex items-center justify-between gap-4"><p className="text-sm font-semibold text-[var(--foreground)]">Open signals</p><span className="text-xs text-[var(--muted-foreground)]">View all ↗</span></div><p className="technical mt-2 text-3xl font-bold text-[var(--danger)]">{dashboard.stats.flaky_tests + dashboard.stats.critical_tests + dashboard.stats.broken_tests}</p></div>}
+     </header>
     <HealthStrip health={health} />
     {error ? <div className="panel mt-6 border-[var(--danger)] p-5"><p className="font-semibold text-[var(--danger)]">Unable to load reliability data.</p><p className="technical mt-2 text-xs text-[var(--muted-foreground)]">{error}</p></div> : !hasData ? <div className="mt-6"><EmptyState /></div> : <div className="mt-8 grid gap-10">
       <section id="action-center" className="grid gap-4 lg:grid-cols-[minmax(240px,0.7fr)_minmax(0,1.3fr)]"><ReliabilityHero reliability={dashboard!.reliability} /><div className="panel grid grid-cols-2 gap-5 p-5 sm:grid-cols-5 sm:items-center"><Stat label="Total tests" value={dashboard!.stats.total_tests} /><Stat label="Flaky" value={dashboard!.stats.flaky_tests} tone="text-[var(--primary)]" /><Stat label="Critical" value={dashboard!.stats.critical_tests} tone="text-[var(--danger)]" /><Stat label="Broken" value={dashboard!.stats.broken_tests} tone="text-[var(--danger)]" /><Stat label="Analyzed" value={dashboard!.stats.tests_analyzed} /></div></section>
