@@ -63,10 +63,10 @@ const pr: CorrelatedPr = {
   changedFiles: ["src/payments/a.ts", "src/payments/b.ts"],
 };
 
-test("title follows the [FlakyGuard] name/category/score format", () => {
+test("title follows the [Echo] name/category/score format", () => {
   assert.equal(
     issueTitle({ evidence: evidence(), ai: null, pr: null }),
-    "[FlakyGuard] testLogin is flaky (flake score 57)",
+    "[Echo] testLogin is flaky (flake score 57)",
   );
 });
 
@@ -88,7 +88,7 @@ test("body contains every required section and field", () => {
     "timing correlation, not causation",
     "Changed files (2)",
     "`src/payments/a.ts`",
-    "[Open in FlakyGuard](https://fg.test/tests/1)",
+    "[Open in Echo](https://fg.test/tests/1)",
   ]) {
     assert.ok(body.includes(needle), `missing: ${needle}`);
   }

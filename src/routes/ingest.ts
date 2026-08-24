@@ -25,7 +25,7 @@ function bearerToken(auth: string | undefined): string {
 }
 
 /**
- * Receives JUnit XML test reports from the flakyguard-action step.
+ * Receives JUnit XML test reports from the upload action step.
  *
  * Auth is a per-installation API key: the key resolves the caller's
  * installation, which both authorizes the request and scopes which

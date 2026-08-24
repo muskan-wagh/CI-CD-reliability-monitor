@@ -6,6 +6,7 @@ import { PostgresDeliveryStore } from "./db/postgresDeliveryStore.js";
 import { createWebhookProcessor } from "./lib/processWebhook.js";
 import { processIngest } from "./lib/ingest.js";
 import { verifyApiKey } from "./lib/apiKeys.js";
+import { createClerkVerifier } from "./lib/clerkAuth.js";
 
 const config = loadConfig();
 
@@ -25,7 +26,12 @@ const app = buildApp(
       verifyKey: (rawKey) => verifyApiKey(pool, rawKey),
       processIngest: (input) => processIngest(pool, input),
     },
-    api: { pool, sessionSecret: config.sessionSecret },
+    api: {
+      pool,
+      auth: config.clerkSecretKey
+        ? createClerkVerifier(config.clerkSecretKey)
+        : undefined,
+    },
   },
 );
 

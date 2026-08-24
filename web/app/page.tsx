@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
 import {
   api,
   type ActivityItem,
@@ -21,7 +20,6 @@ import { formatDuration, formatMs, healthTone, pct, relativeTime } from "@/lib/u
 export const dynamic = "force-dynamic";
 
 const INSTALL_URL = process.env.NEXT_PUBLIC_GITHUB_APP_INSTALL_URL ?? "";
-const AUTH_ENABLED = Boolean(process.env.SESSION_SECRET);
 
 function SectionHeading({
   eyebrow,
@@ -337,11 +335,7 @@ function Waste({ waste }: { waste: CiWaste }) {
 }
 
 function EmptyState() {
-  return <div className="panel-strong px-6 py-16 text-center"><p className="eyebrow">No signal yet</p><h2 className="mt-3 text-2xl font-semibold tracking-tight">Connect a repository to start monitoring CI reliability.</h2><p className="mx-auto mt-3 max-w-[52ch] text-sm leading-6 text-[var(--muted-foreground)]">FlakyGuard needs a GitHub App installation and a workflow upload step before it can show evidence.</p>{INSTALL_URL && <a href={INSTALL_URL} target="_blank" rel="noreferrer" className="mt-7 inline-block rounded-sm bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-[var(--background)]">Install FlakyGuard</a>}</div>;
-}
-
-function SignIn() {
-  return <main className="flex min-h-screen items-center justify-center px-6"><div className="max-w-sm text-center"><span className="mx-auto block h-3 w-3 bg-[var(--primary)]" /><p className="technical mt-5 text-sm font-bold tracking-[0.16em]">FLAKYGUARD</p><h1 className="mt-4 text-2xl font-semibold">Your CI evidence, in one place.</h1><a href="/api/auth/login" className="mt-7 inline-block rounded-sm bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-[var(--background)]">Sign in with GitHub</a></div></main>;
+  return <div className="panel-strong px-6 py-16 text-center"><p className="eyebrow">No signal yet</p><h2 className="mt-3 text-2xl font-semibold tracking-tight">Connect a repository to start monitoring CI reliability.</h2><p className="mx-auto mt-3 max-w-[52ch] text-sm leading-6 text-[var(--muted-foreground)]">Echo needs a GitHub App installation and a workflow upload step before it can show evidence.</p>{INSTALL_URL && <a href={INSTALL_URL} target="_blank" rel="noreferrer" className="mt-7 inline-block rounded-sm bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-[var(--background)]">Install Echo</a>}</div>;
 }
 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ days?: string }> }) {
@@ -351,26 +345,19 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   let health: Health | null = null;
   let repos: RepoSummary[] = [];
   let error: string | null = null;
-  let signedOut = false;
 
-  if (AUTH_ENABLED && !(await cookies()).get("flakyguard_session")?.value) signedOut = true;
-  if (!signedOut) {
-    try {
-      const [d, h, r] = await Promise.all([
-        api<Dashboard>(`/api/dashboard?days=${days}`),
-        api<Health>("/api/health").catch(() => null),
-        api<{ data: RepoSummary[] }>("/api/repos"),
-      ]);
-      dashboard = d;
-      health = h;
-      repos = r.data;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      signedOut = AUTH_ENABLED && message.includes("401");
-      if (!signedOut) error = message;
-    }
+  try {
+    const [d, h, r] = await Promise.all([
+      api<Dashboard>(`/api/dashboard?days=${days}`),
+      api<Health>("/api/health").catch(() => null),
+      api<{ data: RepoSummary[] }>("/api/repos"),
+    ]);
+    dashboard = d;
+    health = h;
+    repos = r.data;
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
   }
-  if (signedOut) return <SignIn />;
   const hasData = dashboard !== null && (dashboard.stats.total_tests > 0 || dashboard.recentRuns.length > 0);
 
   return <AppShell active="overview"><main className="mx-auto max-w-[1440px] px-4 pb-16 pt-7 sm:px-6 lg:px-10">

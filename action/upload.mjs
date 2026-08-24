@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// FlakyGuard upload — zero-dependency composite action script.
-// Reads a JUnit XML report and POSTs it to the FlakyGuard ingest endpoint.
+// Echo upload — zero-dependency composite action script.
+// Reads a JUnit XML report and POSTs it to the Echo ingest endpoint.
 
 import { readFileSync, statSync } from "node:fs";
 
 const MAX_REPORT_BYTES = 10 * 1024 * 1024; // matches server-side cap philosophy
 
 function log(msg) {
-  console.log(`[flakyguard] ${msg}`);
+  console.log(`[echo] ${msg}`);
 }
 
 function env(name) {
@@ -21,7 +21,7 @@ async function main() {
 
   // Skip-safe: fork PRs and repos without secrets stay green.
   if (!apiUrl || !apiKey) {
-    log("skipped: FLAKYGUARD api-url/api-key not configured");
+    log("skipped: echo api-url/api-key not configured");
     return;
   }
 
@@ -74,6 +74,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`[flakyguard] ${err.message}`);
+  console.error(`[echo] ${err.message}`);
   process.exit(1);
 });

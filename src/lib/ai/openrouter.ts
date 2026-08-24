@@ -24,7 +24,7 @@ export class OpenRouterProvider implements AiProvider {
 
   async investigate(evidence: FailureEvidence): Promise<AiInvestigation> {
     const system = [
-      "You are a CI failure analyst for FlakyGuard.",
+      "You are a CI failure analyst for Echo.",
       "You receive a structured evidence pack about ONE flaky/failing test.",
       "Respond with ONLY minified JSON matching exactly:",
       '{"summary":string,"classification":"CONFIRMED"|"LIKELY"|"POSSIBLE"|"UNKNOWN","likely_cause":string,"confidence":number,"evidence":string[],"possible_causes":string[],"recommended_actions":string[]}',
@@ -45,8 +45,8 @@ export class OpenRouterProvider implements AiProvider {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
           // OpenRouter attribution headers (recommended).
-          "HTTP-Referer": process.env.DASHBOARD_URL || "https://flakyguard.local",
-          "X-Title": "FlakyGuard",
+          "HTTP-Referer": process.env.DASHBOARD_URL || "https://echo.local",
+          "X-Title": "Echo",
         },
         body: JSON.stringify({
           model: this.model,

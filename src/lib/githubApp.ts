@@ -79,7 +79,7 @@ async function githubFetch<T>(
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "FlakyGuard",
+      "User-Agent": "Echo",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(rest.headers as Record<string, string> | undefined),
     },

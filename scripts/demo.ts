@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * FlakyGuard deterministic end-to-end demo.
+ * Echo deterministic end-to-end demo.
  *
- * Simulates a real GitHub Actions -> FlakyGuard flow WITHOUT GitHub, by
+ * Simulates a real GitHub Actions -> Echo flow WITHOUT GitHub, by
  * exercising the exact same HTTP endpoints the production system uses:
  *   - POST /v1/ingest            (the flakyguard-action path)
  *   - POST /webhooks/github      (the GitHub App webhook path, HMAC-signed)
@@ -253,7 +253,7 @@ async function main(): Promise<void> {
   const reset = process.argv.includes("--reset");
   if (reset) await resetDemoData();
 
-  console.log(`FlakyGuard demo: seeding "${REPO_FULL_NAME}" (${RUNS} runs)`);
+  console.log(`Echo demo: seeding "${REPO_FULL_NAME}" (${RUNS} runs)`);
 
   await postInstallation();
   console.log("[demo] installation created");

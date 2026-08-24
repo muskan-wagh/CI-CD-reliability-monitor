@@ -18,9 +18,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      # Dogfood: FlakyGuard monitors its own tests. Skips cleanly when the
+      # Dogfood: Echo monitors its own tests. Skips cleanly when the
       # FLAKYGUARD_API_KEY secret is unset (fork PRs, first runs).
-      - name: Upload results to FlakyGuard
+      - name: Upload results to Echo
         if: always()
         continue-on-error: true
         uses: ./action

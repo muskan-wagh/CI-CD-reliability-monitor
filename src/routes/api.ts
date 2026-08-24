@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { Pool } from "pg";
 import { issueApiKey } from "../lib/apiKeys.js";
-import { verifySessionToken } from "../lib/session.js";
+import type { TokenVerifier } from "../lib/clerkAuth.js";
 import { buildFailureEvidence } from "../lib/evidence.js";
 import { investigateTest } from "../lib/aiInvestigation.js";
 import { AiNotConfiguredError } from "../lib/ai/index.js";
@@ -16,18 +16,18 @@ import type { CorrelatedPr } from "../lib/prCorrelation.js";
 export interface ApiOptions {
   pool: Pool;
   /**
-   * Shared HMAC secret for dashboard session tokens. When unset, the API runs
-   * in an unauthenticated "dev" mode (all data visible) so local dev + the
-   * demo keep working without OAuth. In production this MUST be set.
+   * Bearer-token verifier (Clerk in production). When unset, the API runs in
+   * an unauthenticated "dev" mode (all data visible) so local dev + the demo
+   * keep working without auth. In production this MUST be provided.
    */
-  sessionSecret?: string;
+  auth?: TokenVerifier;
 }
 
 declare module "fastify" {
   interface FastifyRequest {
     /** Caller's installation ids, or null in dev mode (access to everything). */
     installations: number[] | null;
-    /** GitHub login from the verified session ("local-dev" in dev mode). */
+    /** Authenticated caller id from the verified session ("local-dev" in dev mode). */
     userLogin: string;
   }
 }
@@ -40,28 +40,33 @@ function bearerToken(auth: string | undefined): string {
 
 /**
  * Read-only REST API for the dashboard. Every data route is scoped to the
- * caller's installations (derived server-side from the signed session token);
+ * caller's installations (derived server-side from the verified session);
  * the frontend never supplies installation/repository ids to authorize itself.
  */
 const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
-  const { pool, sessionSecret } = options;
+  const { pool, auth } = options;
 
   const authPreHandler = async (
     request: import("fastify").FastifyRequest,
     reply: import("fastify").FastifyReply,
   ): Promise<void> => {
-    if (!sessionSecret) {
+    if (!auth) {
       request.installations = null;
       request.userLogin = "local-dev";
       return;
     }
-    const session = verifySessionToken(bearerToken(request.headers.authorization), sessionSecret);
+    let session: { userId: string; installations: number[] } | null = null;
+    try {
+      session = await auth.verify(bearerToken(request.headers.authorization));
+    } catch (err) {
+      request.log.error({ err }, "session verification failed");
+    }
     if (!session) {
       await reply.code(401).send({ error: "unauthorized" });
       return;
     }
     request.installations = session.installations;
-    request.userLogin = session.login;
+    request.userLogin = session.userId;
   };
 
   // Shared ownership guard for single-resource routes: 404 when the resource's
@@ -591,7 +596,7 @@ const apiPlugin: FastifyPluginAsync<ApiOptions> = async (app, options) => {
         {
           title: issueTitle(input),
           body: renderIssueBody(input),
-          labels: ["flakyguard"],
+          labels: ["echo"],
         },
       );
 

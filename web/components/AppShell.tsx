@@ -1,6 +1,5 @@
 import Link from "next/link";
-
-const AUTH_ENABLED = Boolean(process.env.SESSION_SECRET);
+import UserCard, { TopbarUserButton } from "./UserCard";
 
 const links = [
   { label: "Overview", href: "/", key: "overview", icon: "overview" },
@@ -41,11 +40,11 @@ export default function AppShell({
             <div className="flex items-center gap-2.5">
               <span className="text-[var(--foreground)]"><Icon name="logo" size={21} /></span>
               <span className="technical text-[15px] font-bold tracking-[0.04em] text-[var(--foreground)]">
-                FLAKYGUARD
+                ECHO
               </span>
             </div>
             <p className="mt-2 max-w-[16ch] text-xs leading-5 text-[var(--muted-foreground)]">
-              CI reliability, with evidence.
+              Every failure leaves a signal.
             </p>
           </Link>
         </div>
@@ -69,24 +68,19 @@ export default function AppShell({
           </div>
         </nav>
         <div className="mt-auto px-3 pb-5">
-          <div className="user-card flex items-center gap-3 rounded-md border px-3 py-3">
-            <span className="avatar">RW</span>
-            <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">Rahul Wagh</span><span className="technical mt-1 block truncate text-[9px] text-[var(--muted-foreground)]">rahul@flakyguard.dev</span></span>
-            <span className="text-[var(--muted-foreground)]"><Icon name="arrow" size={14} /></span>
-          </div>
+          <UserCard />
           <button type="button" className="mt-3 flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--foreground)]"><span className="text-lg leading-none">←</span>Collapse</button>
-          {AUTH_ENABLED && <Link href="/api/auth/logout" className="mt-2 block px-3 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">Sign out</Link>}
         </div>
       </aside>
 
       <div className="min-w-0 flex-1">
         <header className="topbar app-nav flex items-center justify-between border-b px-4 py-3 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-2 lg:hidden"><span className="text-[var(--foreground)]"><Icon name="logo" size={18} /></span><span className="technical text-xs font-bold tracking-[0.08em]">FLAKYGUARD</span></Link>
+          <Link href="/" className="flex items-center gap-2 lg:hidden"><span className="text-[var(--foreground)]"><Icon name="logo" size={18} /></span><span className="technical text-xs font-bold tracking-[0.08em]">ECHO</span></Link>
           <div className="topbar-spacer hidden lg:block" />
           <div className="flex items-center gap-3">
             <label className="search-box hidden items-center gap-2 rounded-md border px-3 py-2 sm:flex"><span className="text-[var(--muted-foreground)]"><Icon name="search" size={16} /></span><span className="sr-only">Search</span><input aria-label="Search anything" placeholder="Search anything..." /><kbd>⌘ K</kbd></label>
             <button type="button" aria-label="Notifications" className="toolbar-button hidden rounded-md border p-2 text-[var(--muted)] hover:text-[var(--foreground)] sm:block"><Icon name="bell" size={18} /></button>
-            <button type="button" aria-label="Account menu" className="flex items-center gap-2 text-xs"><span className="avatar avatar-small">RW</span><span className="hidden text-[var(--muted)] sm:block">⌄</span></button>
+            <TopbarUserButton />
           </div>
         </header>
         <div className="app-nav flex items-center gap-1 overflow-x-auto border-b px-4 py-2 lg:hidden">
@@ -103,7 +97,6 @@ export default function AppShell({
               {link.label}
             </Link>
           ))}
-          {AUTH_ENABLED && <Link href="/api/auth/logout" className="ml-auto whitespace-nowrap px-3 py-2 text-xs text-[var(--muted-foreground)]">Sign out</Link>}
         </div>
         {children}
       </div>

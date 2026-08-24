@@ -2,10 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Pool } from "pg";
 import { buildApp } from "../src/app.js";
-import { signSessionToken } from "../src/lib/session.js";
+import type { TokenVerifier } from "../src/lib/clerkAuth.js";
 import { CrossTenantIngestError } from "../src/lib/ingest.js";
 
 const SECRET = "test-secret";
+
+/**
+ * Stub bearer-token verifier with the same contract as the production Clerk
+ * verifier: a token is `tok:<installation ids>` and any tampered/unknown
+ * input fails verification. Lets these tests exercise tenancy scoping without
+ * calling out to Clerk.
+ */
+function stubVerifier(): TokenVerifier {
+  return {
+    async verify(bearer) {
+      const m = /^tok:([\d,]*)$/.exec(bearer);
+      if (!m) return null;
+      const installations = m[1] === "" ? [] : m[1]!.split(",").map(Number);
+      return { userId: "user_test", installations };
+    },
+  };
+}
 
 function fakePool(calls: { sql: string; params?: unknown[] }[] = []) {
   return {
@@ -18,35 +35,25 @@ function fakePool(calls: { sql: string; params?: unknown[] }[] = []) {
   } as unknown as Pool;
 }
 
-function token(installations: number[]) {
-  return signSessionToken(
-    { sub: "123", login: "alice", installations },
-    SECRET,
-    3600,
-  );
-}
-
 test("dashboard requires a session token when auth is enabled", async () => {
   const app = buildApp(
     { githubWebhookSecret: "x" },
-    { api: { pool: fakePool(), sessionSecret: SECRET }, logger: false },
+    { api: { pool: fakePool(), auth: stubVerifier() }, logger: false },
   );
   const res = await app.inject({ method: "GET", url: "/api/dashboard" });
   assert.equal(res.statusCode, 401);
   await app.close();
 });
 
-test("dashboard rejects a tampered token", async () => {
-  const good = token([5]);
-  const tampered = good.slice(0, -2) + "zz";
+test("dashboard rejects an invalid token", async () => {
   const app = buildApp(
     { githubWebhookSecret: "x" },
-    { api: { pool: fakePool(), sessionSecret: SECRET }, logger: false },
+    { api: { pool: fakePool(), auth: stubVerifier() }, logger: false },
   );
   const res = await app.inject({
     method: "GET",
     url: "/api/dashboard",
-    headers: { authorization: `Bearer ${tampered}` },
+    headers: { authorization: "Bearer tok:5zz" },
   });
   assert.equal(res.statusCode, 401);
   await app.close();
@@ -56,12 +63,12 @@ test("dashboard scopes its queries to the caller's installations", async () => {
   const calls: { sql: string; params?: unknown[] }[] = [];
   const app = buildApp(
     { githubWebhookSecret: "x" },
-    { api: { pool: fakePool(calls), sessionSecret: SECRET }, logger: false },
+    { api: { pool: fakePool(calls), auth: stubVerifier() }, logger: false },
   );
   const res = await app.inject({
     method: "GET",
     url: "/api/dashboard",
-    headers: { authorization: `Bearer ${token([5, 7])}` },
+    headers: { authorization: "Bearer tok:5,7" },
   });
   assert.equal(res.statusCode, 200);
   const statsCall = calls.find((c) => c.sql.includes("AS total_tests"));
@@ -70,7 +77,7 @@ test("dashboard scopes its queries to the caller's installations", async () => {
   await app.close();
 });
 
-test("dashboard is open in dev mode (no session secret)", async () => {
+test("dashboard is open in dev mode (no auth configured)", async () => {
   const app = buildApp(
     { githubWebhookSecret: "x" },
     { api: { pool: fakePool() }, logger: false },
@@ -101,12 +108,12 @@ test("test history 404s when it belongs to another installation", async () => {
 
   const app = buildApp(
     { githubWebhookSecret: "x" },
-    { api: { pool: otherPool, sessionSecret: SECRET }, logger: false },
+    { api: { pool: otherPool, auth: stubVerifier() }, logger: false },
   );
   const res = await app.inject({
     method: "GET",
     url: "/api/tests/1/history",
-    headers: { authorization: `Bearer ${token([5])}` },
+    headers: { authorization: "Bearer tok:5" },
   });
   assert.equal(res.statusCode, 404);
   await app.close();

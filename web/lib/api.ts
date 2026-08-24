@@ -1,3 +1,5 @@
+import { auth } from "@clerk/nextjs/server";
+
 export interface RepoSummary {
   id: number;
   full_name: string;
@@ -313,17 +315,19 @@ export interface DebugStatus {
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
 /**
- * Session auth headers for server-side calls to the FlakyGuard API. When auth
- * is enabled (SESSION_SECRET set), the signed session cookie is forwarded as a
- * Bearer token; the API verifies it independently.
+ * Auth headers for server-side calls to the Echo API. The caller's
+ * Clerk session token is forwarded as a Bearer token; the API verifies it
+ * independently (signature + tenant scope) — the frontend never supplies its
+ * own installation ids.
  */
 export async function sessionAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
-  if (process.env.SESSION_SECRET) {
-    const { cookies } = await import("next/headers");
-    const cookieStore = await cookies();
-    const token = cookieStore.get("flakyguard_session")?.value;
+  try {
+    const { getToken } = await auth();
+    const token = await getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    // No request scope (build/prerender) or no session — send unauthenticated.
   }
   return headers;
 }
@@ -361,11 +365,11 @@ export async function apiForward<T>(
 }
 
 /**
- * Fetch a JSON endpoint from the FlakyGuard API. Throws a descriptive error on
+ * Fetch a JSON endpoint from the Echo API. Throws a descriptive error on
  * non-2xx responses so callers can distinguish "API down" from "empty data".
  *
- * When auth is enabled (SESSION_SECRET set), the signed session cookie is
- * forwarded to the API as a Bearer token; the API verifies it independently.
+ * The caller's Clerk session token is forwarded to the API as a Bearer token;
+ * the API verifies it independently.
  */
 export async function api<T>(path: string): Promise<T> {
   let res: Response;
@@ -376,7 +380,7 @@ export async function api<T>(path: string): Promise<T> {
     });
   } catch {
     throw new Error(
-      `Could not reach the FlakyGuard API at ${API_URL}. Is the backend running? (npm run dev)`,
+      `Could not reach the Echo API at ${API_URL}. Is the backend running? (npm run dev)`,
     );
   }
   if (!res.ok) {

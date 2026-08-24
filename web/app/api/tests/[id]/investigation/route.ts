@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiForward } from "@/lib/api";
 
-/** Latest cached AI investigation for a test (proxied to the FlakyGuard API). */
+/** Latest cached AI investigation for a test (proxied to the Echo API). */
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },

@@ -26,7 +26,7 @@ export function issueTitle(input: IssueTemplateInput): string {
   const { evidence } = input;
   const category = evidence.score?.category ?? "unanalyzed";
   const score = evidence.score?.score ?? "?";
-  return `[FlakyGuard] ${evidence.test.name} is ${category} (flake score ${score})`;
+  return `[Echo] ${evidence.test.name} is ${category} (flake score ${score})`;
 }
 
 function glyph(status: string): string {
@@ -55,7 +55,7 @@ export function renderIssueBody(input: IssueTemplateInput): string {
 
   const lines: string[] = [];
   lines.push(
-    `FlakyGuard flagged this test as unreliable. Data below is generated from recorded CI results — timing correlations only, no causal claims.`,
+    `Echo flagged this test as unreliable. Data below is generated from recorded CI results — timing correlations only, no causal claims.`,
   );
 
   lines.push(`## Summary`);
@@ -113,7 +113,7 @@ export function renderIssueBody(input: IssueTemplateInput): string {
   } else {
     lines.push(``);
     lines.push(`## AI investigation`);
-    lines.push(`Not run yet — use “Investigate” on the FlakyGuard test page for a root-cause hypothesis.`);
+    lines.push(`Not run yet — use “Investigate” on the Echo test page for a root-cause hypothesis.`);
   }
 
   lines.push(``);
@@ -149,7 +149,7 @@ export function renderIssueBody(input: IssueTemplateInput): string {
   if (testUrl) {
     lines.push(``);
     lines.push(`---`);
-    lines.push(`[Open in FlakyGuard](${testUrl})`);
+    lines.push(`[Open in Echo](${testUrl})`);
   }
 
   return redactDeep(lines.join("\n"));

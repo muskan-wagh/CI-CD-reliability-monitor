@@ -28,7 +28,7 @@ export function buildApp(
 ): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? true });
 
-  app.get("/", async () => ({ message: "FlakyGuard is running" }));
+  app.get("/", async () => ({ message: "Echo is running" }));
 
   app.get("/healthz", async () => ({ status: "ok" }));
 

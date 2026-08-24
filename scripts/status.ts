@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Development-only status tool. Prints row counts and the dashboard summary
- * so you can verify at a glance that FlakyGuard is receiving real data.
+ * so you can verify at a glance that Echo is receiving real data.
  *
  * Usage: npm run db:status
  */
@@ -24,7 +24,7 @@ try {
       (SELECT COUNT(*)::int FROM failure_signatures) AS failure_signatures,
       (SELECT COUNT(*)::int FROM webhook_deliveries)  AS webhook_deliveries
   `);
-  console.log("FlakyGuard database status");
+  console.log("Echo database status");
   console.log("--------------------------");
   for (const [k, v] of Object.entries(result.rows[0])) {
     console.log(`  ${k.padEnd(22)} ${v}`);

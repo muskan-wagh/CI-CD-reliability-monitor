@@ -1,9 +1,9 @@
-name: "FlakyGuard Action"
+name: "Echo Action"
 description: >
-  Upload JUnit test reports to FlakyGuard. Run it in a step with `if: always()`
+  Upload JUnit test reports to Echo. Run it in a step with `if: always()`
   so failing test runs are reported too. Skips silently when api-key is empty
   (e.g. fork PRs, where secrets are unavailable).
-author: "FlakyGuard"
+author: "Echo"
 
 inputs:
   report-path:
@@ -11,10 +11,10 @@ inputs:
     required: true
     default: junit.xml
   api-url:
-    description: "FlakyGuard API base URL"
+    description: "Echo API base URL"
     required: true
   api-key:
-    description: "FlakyGuard ingest API key"
+    description: "Echo ingest API key"
     required: true
   repository:
     description: "Repository full name"

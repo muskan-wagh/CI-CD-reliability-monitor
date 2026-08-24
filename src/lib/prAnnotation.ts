@@ -49,12 +49,12 @@ export function renderFlakyReport(input: {
     .join("\n");
 
   const dashboardLine = input.dashboardUrl
-    ? `\n[View on FlakyGuard](${input.dashboardUrl})`
+    ? `\n[View on Echo](${input.dashboardUrl})`
     : "";
 
   return [
     COMMENT_MARKER,
-    `## ⚠️ FlakyGuard: ${input.tests.length} flaky test${input.tests.length === 1 ? "" : "s"} detected`,
+    `## ⚠️ Echo: ${input.tests.length} flaky test${input.tests.length === 1 ? "" : "s"} detected`,
     "",
     "| Test | File | Score | Recent runs | Top failure |",
     "|---|---|---|---|---|",
@@ -64,7 +64,7 @@ export function renderFlakyReport(input: {
     "Scores are statistical triage over recent CI history, not a verdict." +
       dashboardLine,
     "",
-    "<sub>FlakyGuard • one living report per PR, updated not spammed</sub>",
+    "<sub>Echo • every failure leaves a signal • one living report per PR, updated not spammed</sub>",
   ].join("\n");
 }
 
@@ -123,7 +123,7 @@ async function findCrossedTests(
 }
 
 /**
- * Post/update the living FlakyGuard report comment on the PR that owns this
+ * Post/update the living Echo report comment on the PR that owns this
  * run. Runs after async scoring; every failure path is non-fatal.
  */
 export async function annotateRun(

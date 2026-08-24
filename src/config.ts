@@ -12,10 +12,10 @@ export interface Config extends AppConfig {
   host: string;
   databaseUrl: string;
   /**
-   * Shared HMAC secret for dashboard session tokens (frontend + API). When
-   * unset, the API runs in unauthenticated "dev" mode.
+   * Clerk secret key used to verify dashboard session tokens. When unset,
+   * the API runs in unauthenticated "dev" mode.
    */
-  sessionSecret?: string;
+  clerkSecretKey?: string;
   /** Optional: enables PR annotation (Phase 5). Absent -> annotation disabled. */
   githubAppId?: string;
   privateKeyPath?: string;
@@ -65,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port,
     host,
     databaseUrl,
-    sessionSecret: env.SESSION_SECRET || undefined,
+    clerkSecretKey: env.CLERK_SECRET_KEY || undefined,
     githubAppId: githubAppId || undefined,
     privateKeyPath: privateKeyPath || undefined,
     dashboardUrl: env.DASHBOARD_URL || undefined,
