@@ -1,24 +1,24 @@
 @import "tailwindcss";
 
 :root {
-  --background: oklch(7.5% 0.012 255);
-  --sidebar: oklch(5.5% 0.012 255);
-  --foreground: oklch(94% 0.008 255);
-  --muted: oklch(67% 0.012 255);
-  --subtle: oklch(48% 0.012 255);
+  --background: #0D1117;
+  --sidebar: #010409;
+  --foreground: #E6EDF3;
+  --muted: #8B949E;
+  --subtle: #6E7681;
   --muted-foreground: var(--muted);
-  --border: oklch(22% 0.012 255);
-  --border-subtle: oklch(15% 0.012 255);
-  --card: oklch(9.5% 0.012 255);
-  --card-elevated: oklch(11.5% 0.014 255);
+  --border: #30363D;
+  --border-subtle: #21262D;
+  --card: #161B22;
+  --card-elevated: #1C2128;
   --card-strong: var(--card-elevated);
-  --primary: oklch(78% 0.14 75);
-  --danger: oklch(67% 0.19 27);
-  --warning: oklch(80% 0.16 88);
-  --success: oklch(72% 0.15 145);
-  --info: oklch(75% 0.11 230);
-  --ai: oklch(72% 0.14 300);
-  --radius: 5px;
+  --primary: #58A6FF;
+  --danger: #F85149;
+  --warning: #D29922;
+  --success: #3FB950;
+  --info: #58A6FF;
+  --ai: #A371F7;
+  --radius: 6px;
   --space-sm: 0.5rem;
   --space-md: 0.75rem;
   --space-lg: 1rem;
@@ -217,8 +217,13 @@ h1, h2, h3 {
 
 .status-flaky {
   color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  border-color: color-mix(in srgb, var(--warning) 34%, var(--border));
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--border));
+}
+
+.status-flaky strong,
+.status-watch strong {
+  color: inherit;
 }
 
 .status-critical,
