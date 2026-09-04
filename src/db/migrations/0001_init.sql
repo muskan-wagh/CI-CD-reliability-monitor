@@ -1,4 +1,4 @@
--- FlakyGuard baseline schema (matches the blueprint Part 11 design).
+-- Echo baseline schema (matches the blueprint Part 11 design).
 -- NOTE: the shared Supabase DB already has this applied as version 0001_init.sql;
 -- this file exists so a fresh database can be bootstrapped identically.
 

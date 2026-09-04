@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Deterministic flaky-test demo for FlakyGuard.
+// Deterministic flaky-test demo for Echo.
 //
 // `testLogin` fails whenever the workflow run number is a multiple of 3:
 //   run 1 PASS, run 2 PASS, run 3 FAIL, run 4 PASS, run 5 PASS, run 6 FAIL ...
@@ -7,7 +7,7 @@
 // code). No randomness, no sleeps — the outcome is a pure function of the run
 // number, so a demo is fully reproducible.
 //
-// Writes a JUnit XML report to `junit.xml` that the flakyguard-action uploads.
+// Writes a JUnit XML report to `junit.xml` that the Echo action uploads.
 
 import { writeFileSync } from "node:fs";
 

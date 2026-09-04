@@ -4,11 +4,11 @@
  *
  * Simulates a real GitHub Actions -> Echo flow WITHOUT GitHub, by
  * exercising the exact same HTTP endpoints the production system uses:
- *   - POST /v1/ingest            (the flakyguard-action path)
+ *   - POST /v1/ingest            (the Echo action path)
  *   - POST /webhooks/github      (the GitHub App webhook path, HMAC-signed)
  *
  * Every byte of data flows through the real parser -> store -> scoring code.
- * The demo repo is clearly named `flakyguard-demo/*` so it can never be
+ * The demo repo is clearly named `echo-demo/*` so it can never be
  * mistaken for real production data.
  *
  * Usage:
@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 
 const config = loadConfig();
 const BASE = `http://127.0.0.1:${config.port}`;
-const REPO_FULL_NAME = "flakyguard-demo/api-service";
+const REPO_FULL_NAME = "echo-demo/api-service";
 const REPO_GITHUB_ID = 900_000_001;
 const INSTALLATION_ID = 900_000_001;
 const WORKFLOW_NAME = "CI";

@@ -5,7 +5,7 @@ import {
 } from "./githubApp.js";
 import { upsertPrAnnotation } from "./store.js";
 
-export const COMMENT_MARKER = "<!-- flakyguard:report:v1 -->";
+export const COMMENT_MARKER = "<!-- echo:report:v1 -->";
 
 export interface FlakyTestForReport {
   name: string;
