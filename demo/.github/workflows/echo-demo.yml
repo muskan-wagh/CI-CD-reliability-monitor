@@ -1,20 +1,20 @@
-# FlakyGuard demo workflow.
+# Echo demo workflow.
 #
 # This is the canonical "does it actually work?" demo. It runs a deterministic
 # flaky test (`testLogin` fails when the run number is a multiple of 3) and
-# uploads the JUnit report to FlakyGuard.
+# uploads the JUnit report to Echo.
 #
 # Trigger a run:
 #   1. Configure two secrets/vars on the repo:
-#        vars.FLAKYGUARD_API_URL   -> https://<your-flakyguard-host>   (or http://localhost:3000 via tunnel)
-#        secrets.FLAKYGUARD_API_KEY -> the INGEST_API_KEY from your .env
+#        vars.ECHO_API_URL     -> https://<your-echo-host>   (or http://localhost:3000 via tunnel)
+#        secrets.ECHO_API_KEY  -> the per-installation ingest API key from the dashboard
 #   2. Then either:
 #        - push a commit (run number increments each time), or
 #        - run it manually N times:
-#            gh workflow run flakyguard-demo.yml
+#            gh workflow run echo-demo.yml
 #        (the outcome depends only on GITHUB_RUN_NUMBER, so ~10 runs give a
 #         clear flaky score without any randomness)
-name: FlakyGuard Demo CI
+name: Echo Demo CI
 
 on:
   push:
@@ -31,11 +31,11 @@ jobs:
           node-version: 20
       - name: Run deterministic flaky tests (writes junit.xml)
         run: node demo/flaky-tests.mjs
-      - name: Upload results to FlakyGuard
+      - name: Upload results to Echo
         if: always()
         continue-on-error: true
-        uses: ./action
+        uses: muskan-wagh/CI-CD-reliability-monitor/action@v1
         with:
           report-path: junit.xml
-          api-url: ${{ vars.FLAKYGUARD_API_URL }}
-          api-key: ${{ secrets.FLAKYGUARD_API_KEY }}
+          api-url: ${{ vars.ECHO_API_URL }}
+          api-key: ${{ secrets.ECHO_API_KEY }}
